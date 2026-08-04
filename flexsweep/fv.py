@@ -659,7 +659,7 @@ def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
 
     filterwarnings("ignore", message="invalid INFO header", module="allel.io.vcf_read")
 
-    raw_data = read_vcf(hap_data, region=region, samples=samples)
+    raw_data = read_vcf(hap_data, region=region, samples=samples, fields="*")
 
     try:
         gt = GenotypeArray(raw_data["calldata/GT"])
@@ -691,14 +691,18 @@ def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
     #     d_pos = dict(zip(np.arange(tmp[0], tmp[1] + 1), np.arange(int(5e5)) + 1))
 
     if recombination_map is None:
+        # if CM in field in VCF
+        # target_key = next((k for k in raw_data.keys() if k.lower() == 'variants/cm'), None)
         rec_map = pl.DataFrame(
             {
                 "chrom": np_chrom,
                 "idx": np.arange(position_masked.size),
                 "pos": position_masked,
                 "cm": position_masked,
+                # "cm": raw_data[target_key][:,0] if target_key else position_masked,
             }
         ).to_numpy()
+
     else:
         df_recombination_map = (
             pl.read_csv(
@@ -766,6 +770,8 @@ def get_cm(df_rec_map, positions, cm_mb=False):
         df_rec_map.select("cm").to_numpy().flatten(),
         kind="linear",
         fill_value="extrapolate",
+        # fill_value=(0,df_rec_map.select("cm").max().item()),
+        # bounds_error=False
     )
 
     if cm_mb:
@@ -967,6 +973,7 @@ def _process_vcf(
     func=None,
     save_stats=False,
     stats=None,
+    centers=None,
 ):
     from . import Parallel, delayed
     from .data import Data
@@ -1168,6 +1175,7 @@ def _process_vcf(
                 stats=stats,
                 nthreads=nthreads,
                 parallel_manager=stats_pool,
+                centers=centers,
             )
             snps_df, window_df = _tmp_stats
             tmp_bins.append({"snps": snps_df, "windows": window_df})
@@ -1208,6 +1216,7 @@ def _process_vcf(
                 vcf=True,
                 df_r_bins=df_r,
                 locus_length=locus_length,
+                centers=centers,
             )
             df_fv_cnn[k] = df_w
             df_fv_cnn_raw[k] = df_w_raw
@@ -1260,6 +1269,7 @@ def _process_sims(
     save_stats=False,
     locus_length=int(1.2e6),
     stats=None,
+    centers=None,
 ):
     """
     Process ms files from simulation to compute, normalize, and estimate feature vectors.
@@ -1332,11 +1342,13 @@ def _process_sims(
 
     with Parallel(n_jobs=nthreads, backend="loky", verbose=2) as parallel:
         for sim_type, sim_list in sims.items():
+            # if len(sim_list) >= 5000:
+            # mask = np.random.choice(mask_full, 1000,replace=False)
+
             if len(sim_list) > 250000:
                 mask = np.random.choice(np.arange(len(sim_list)), 250000)
             else:
                 mask = np.arange(0, len(sim_list))
-                # mask = np.arange(0, 10000)
 
             params = df_params.filter(pl.col("model") == sim_type)[mask, 1:].to_numpy()
             d_centers[sim_type] = np.array(center).astype(int)
@@ -1372,6 +1384,7 @@ def _process_sims(
                     step,
                     locus_length,
                     stats=stats,
+                    centers=centers,
                 )
                 for batch, start_idx in batches
             )
@@ -1436,7 +1449,7 @@ def _process_sims(
                 {"snps": s, "window": w} for s, w in zip(snps_list, windows_list)
             ]
 
-            if not np.all(params[:, 3] == 0):
+            if not np.all(params[:, 0] == 0):
                 params[:, 0] = -np.log(params[:, 0])
             results[sim_type] = summaries(raw_stats, params)
 
@@ -1459,6 +1472,7 @@ def _process_sims(
                 vcf=False,
                 df_r_bins=df_r[sim_type],
                 locus_length=locus_length,
+                centers=centers,
             )
             df_fv_cnn[sim_type] = df_w
             df_fv_cnn_raw[sim_type] = df_w_raw
@@ -1492,6 +1506,7 @@ def summary_statistics(
     save_stats=False,
     only_normalize=False,
     stats=None,
+    centers=None,
 ):
     """
     Compute summary statistics to create needed feature vectors for CNN training/prediction
@@ -1522,6 +1537,16 @@ def summary_statistics(
         ``locus_length``, determines the center positions:
         ``centers = range(step//2, locus_length - step//2 + step, step)``.
         **Default:** ``1e5``.
+    :param list centers:
+        Optional explicit list of center positions (absolute bp within
+        ``[0, locus_length]``), overriding the uniform grid derived from ``step``.
+        Enables non-uniform centering (e.g. Tier-A log-distance / radial sampling
+        concentrated near the sweep). When ``None`` (default) the behaviour is
+        unchanged: centers are derived from ``step``. The SAME ``centers`` is used
+        for both statistic computation and normalization, so the ``(center, window)``
+        feature layout stays internally consistent. Applies to both the simulation
+        and VCF paths; for VCF the list is the sim-relative grid, remapped per region.
+        **Default:** ``None``.
     :param int locus_length:
         Total locus length in base pairs.
         **Default:** ``1200000``.
@@ -1620,6 +1645,7 @@ def summary_statistics(
                 func=func,
                 save_stats=save_stats,
                 stats=stats,
+                centers=centers,
             )
         else:
             if func is not None:
@@ -1638,6 +1664,7 @@ def summary_statistics(
                 save_stats=save_stats,
                 locus_length=locus_length,
                 stats=stats,
+                centers=centers,
             )
 
 
@@ -1777,6 +1804,7 @@ def calculate_stats_simulations(
     step=1e5,
     locus_length=int(1.2e6),
     stats=None,
+    centers=None,
 ):
     if center is None:
         center = [int(step // 2), int(locus_length - step // 2)]
@@ -1896,7 +1924,9 @@ def calculate_stats_simulations(
     if not window_cols:
         window_data = None
     else:
-        if len(center) == 1:
+        if centers is not None:
+            centers = np.asarray(sorted(int(c) for c in centers)).astype(int)
+        elif len(center) == 1:
             centers = np.arange(center[0], center[0] + step, step).astype(int)
         else:
             centers = np.arange(center[0], center[1] + step, step).astype(int)
@@ -1992,6 +2022,7 @@ def batch_simulations(
     step,
     locus_length=int(1.2e6),
     stats=None,
+    centers=None,
 ):
     """1a+1b: workers return numpy; window arrays stacked per batch for one IPC transfer."""
     snp_results = []  # list of (dict | None), one per file
@@ -2007,6 +2038,7 @@ def batch_simulations(
                 step=step,
                 locus_length=locus_length,
                 stats=stats,
+                centers=centers,
             )
             if out is None or not isinstance(out, (tuple, list)) or len(out) < 2:
                 snp_results.append(None)
@@ -2321,6 +2353,7 @@ def calculate_stats_vcf_flat(
     compute_snp_stats=True,
     parallel_manager=None,
     isafe_region_size=int(2e6),
+    centers=None,
 ):
     """Compute per-locus-window summary statistics from a VCF with O(N) window work.
 
@@ -2402,7 +2435,9 @@ def calculate_stats_vcf_flat(
     )
     nchr = region[0].split(":")[0]
 
-    if len(center) == 1:
+    if centers is not None:
+        centers = np.asarray(sorted(int(c) for c in centers)).astype(int)
+    elif len(center) == 1:
         centers = np.arange(center[0], center[0] + step, step).astype(int)
     else:
         centers = np.arange(center[0], center[1] + step, step).astype(int)
@@ -3054,6 +3089,7 @@ def normalize_stats(
     vcf=False,
     df_r_bins=None,
     locus_length=int(1.2e6),
+    centers=None,
 ):
     df_fv, df_fv_raw = normalization_raw(
         deepcopy(stats_values),
@@ -3067,6 +3103,7 @@ def normalize_stats(
         vcf=vcf,
         df_r_bins=df_r_bins,
         locus_length=locus_length,
+        centers=centers,
     )
 
     df_fv_w = pivot_feature_vectors(df_fv, vcf=vcf)
@@ -3097,7 +3134,9 @@ def normalize_stats(
     return df_fv_w, df_fv_w_raw
 
 
-def batch_normalize_cut_raw(batch_data, bins, center, windows, step, df_r_bins):
+def batch_normalize_cut_raw(
+    batch_data, bins, center, windows, step, df_r_bins, centers=None
+):
     """Process a batch of normalize_cut_raw calls."""
     results_norm = []
     results_raw = []
@@ -3105,7 +3144,7 @@ def batch_normalize_cut_raw(batch_data, bins, center, windows, step, df_r_bins):
     for snps_values in batch_data:
         try:
             df_norm, df_raw = normalize_cut_raw(
-                snps_values, bins, center, windows, step, df_r_bins
+                snps_values, bins, center, windows, step, df_r_bins, centers=centers
             )
             results_norm.append(df_norm)
             results_raw.append(df_raw)
@@ -3151,6 +3190,7 @@ def normalization_raw(
     nthreads=1,
     parallel_manager=None,
     locus_length=int(1.2e6),
+    centers=None,
 ):
     from . import Parallel, delayed
 
@@ -3278,7 +3318,9 @@ def normalization_raw(
             )
 
             # centers range
-            if len(center) == 2:
+            if centers is not None:
+                centers = np.asarray(sorted(int(c) for c in centers)).astype(int)
+            elif len(center) == 2:
                 centers = np.arange(center[0], center[1] + step, step).astype(int)
             else:
                 centers = center
@@ -3440,14 +3482,14 @@ def normalization_raw(
         if parallel_manager is None:
             batch_results = Parallel(n_jobs=nthreads, verbose=10)(
                 delayed(batch_normalize_cut_raw)(
-                    batch, bins, center, windows, step, df_r_bins
+                    batch, bins, center, windows, step, df_r_bins, centers
                 )
                 for batch in batches
             )
         else:
             batch_results = parallel_manager(
                 delayed(batch_normalize_cut_raw)(
-                    batch, bins, center, windows, step, df_r_bins
+                    batch, bins, center, windows, step, df_r_bins, centers
                 )
                 for batch in batches
             )
@@ -3508,6 +3550,7 @@ def normalize_cut_raw(
     windows=[50000, 100000, 200000, 500000, 1000000],
     step=int(1e4),
     df_r_bins=None,
+    centers=None,
 ):
     """
     Sims-only refactor:
@@ -3523,7 +3566,9 @@ def normalize_cut_raw(
     else:
         return None, None
 
-    if len(center) == 2:
+    if centers is not None:
+        centers = np.asarray(sorted(int(c) for c in centers)).astype(int)
+    elif len(center) == 2:
         centers = np.arange(center[0], center[1] + step, step).astype(int)
     else:
         centers = center
@@ -3875,6 +3920,9 @@ def ihs_ihh(
     with np.errstate(divide="ignore", invalid="ignore"):
         ihs = np.log(ihh0 / ihh1)
 
+        # a = np.log(ihh0 / ihh1)
+        # b = np.log(ihh1 / ihh0)
+        # print(b,np.nanmax(a[~np.isinf(a)]),np.nanmax(a[~np.isinf(a)]))
     # mask = (ihh1 != 0) & (ihh0 > 0) & (ihh1 > 0)
     # ihs = np.full_like(ihh0, np.nan, dtype=float)
     # ihs[mask] = np.log(ihh0[mask] / ihh1[mask])
@@ -5756,7 +5804,12 @@ def run_isafe(
             }
         )
 
-        return df_safe.select(["positions", "daf", "isafe"]).sort("positions")
+        return (
+            df_safe.select(["positions", "daf", "isafe"])
+            .sort("positions")
+            .with_columns(pl.col("positions").cast(pl.Int64))
+        )
+
     else:
         df_isafe = isafe(
             hap_filtered, positions_filtered, window, step, top_k, max_rank
@@ -5766,6 +5819,7 @@ def run_isafe(
             .sort("ordinal_pos")
             .rename({"id": "positions", "isafe": "isafe", "freq": "daf"})
             .filter(pl.col("daf") < max_freq)
+            .with_columns(pl.col("positions").cast(pl.Int64))
             .select(["positions", "daf", "isafe"])
         )
 

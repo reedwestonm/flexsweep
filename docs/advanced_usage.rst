@@ -2,10 +2,14 @@ Advanced usage
 ==============
 
 Custom summary statistics
-Select any combination of built-in statistics by passing a list of names to
-the ``stats`` argument of ``summary_statistics``. The pipeline handles
-computation, windowing, and normalisation automatically for both simulations
-and VCF data.
+-------------------------
+
+Users can combine any included summary statistic over user-defined genomic
+intervals, to fit the most informative statistic and region combination for a
+given organism. Select any combination of built-in statistics by passing a list
+of names to the ``stats`` argument of ``summary_statistics``. The pipeline
+handles computation, windowing, and normalisation automatically for both
+simulations and VCF data.
 
 By default (``stats=None``) the full Flex-sweep statistic set is used.
 
@@ -26,134 +30,233 @@ Z-scored per window/centre combination:
 Available statistics
 ~~~~~~~~~~~~~~~~~~~~
 
-**Window-based statistics** — computed for every centre × window-size
-combination:
+Statistics fall into two families. **Window-based** statistics are computed for
+every centre × window-size combination and summarise a genomic interval.
+**SNP-based** statistics are computed per variant and are subsequently
+aggregated over the same centre × window grid. Every name below is a valid
+entry of the ``stats`` argument; passing an unknown name raises a ``ValueError``
+listing all valid names.
+
+**Window-based statistics**
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 80
+   :widths: 16 40 20 24
 
    * - Name
      - Description
+     - Summarises
+     - Reference
    * - ``pi``
-     - Nucleotide diversity :math:`\pi` per base pair
-   * - ``tajima_d``
-     - Tajima's :math:`D`
+     - Average number of pairwise nucleotide differences, per base pair
+     - Nucleotide diversity
+     - `Tajima 1983 <https://doi.org/10.1093/genetics/105.2.437>`_
    * - ``theta_w``
-     - Watterson's :math:`\theta_W` per base pair
+     - Watterson's :math:`\theta_W` based on segregating sites, per base pair
+     - Nucleotide diversity
+     - `Watterson 1975 <https://doi.org/10.1016/0040-5809(75)90020-9>`_
+   * - ``tajima_d``
+     - Tajima's :math:`D`; difference between :math:`\theta_\pi` and
+       :math:`\theta_W`
+     - SFS
+     - `Tajima 1989 <https://doi.org/10.1093/genetics/123.3.585>`_
    * - ``theta_h``
-     - Fay & Wu's :math:`\theta_H` (absolute)
+     - Fay & Wu's :math:`\theta_H`; excess of high-frequency derived alleles
+     - SFS
+     - `Fay & Wu 2000 <https://doi.org/10.1093/genetics/155.3.1405>`_
    * - ``fay_wu_h``
      - Normalised Fay & Wu's :math:`H`
+     - SFS
+     - `Fay & Wu 2000 <https://doi.org/10.1093/genetics/155.3.1405>`_; `Zeng et al. 2006 <https://doi.org/10.1534/genetics.106.061432>`_
+   * - ``zeng_e``
+     - Zeng's :math:`E`; contrast between :math:`\theta_\pi` and Fay & Wu's
+       :math:`H`
+     - SFS
+     - `Zeng et al. 2006 <https://doi.org/10.1534/genetics.106.061432>`_
+   * - ``achaz_y``
+     - Achaz's :math:`Y`; Tajima's :math:`D` analogue excluding derived
+       singletons, robust to sequencing errors (polarized, requires outgroup)
+     - SFS
+     - `Achaz 2008 <https://doi.org/10.1534/genetics.107.082198>`_
+   * - ``achaz_y_star``
+     - Achaz's :math:`Y^*`; folded analogue excluding minor-allele singletons
+     - SFS
+     - `Achaz 2008 <https://doi.org/10.1534/genetics.107.082198>`_
+   * - ``achaz_t``
+     - Achaz's :math:`T_\Omega`; generalised neutrality test defined as the
+       normalized difference between any two frequency-spectrum-based
+       :math:`\hat{\theta}` estimators
+     - SFS
+     - `Achaz 2009 <https://doi.org/10.1534/genetics.109.104042>`_
+   * - ``fuli_d``
+     - Fu & Li's :math:`D`; excess of singletons relative to total mutations
+       (polarized, requires outgroup)
+     - SFS
+     - `Fu & Li 1993 <https://doi.org/10.1093/genetics/133.3.693>`_
+   * - ``fuli_d_star``
+     - Fu & Li's :math:`D^*` (folded)
+     - SFS
+     - `Fu & Li 1993 <https://doi.org/10.1093/genetics/133.3.693>`_
+   * - ``fuli_f``
+     - Fu & Li's :math:`F`; excess of singletons relative to average pairwise
+       differences (polarized, requires outgroup)
+     - SFS
+     - `Fu & Li 1993 <https://doi.org/10.1093/genetics/133.3.693>`_
+   * - ``fuli_f_star``
+     - Fu & Li's :math:`F^*` (folded)
+     - SFS
+     - `Fu & Li 1993 <https://doi.org/10.1093/genetics/133.3.693>`_
+   * - ``max_fda``
+     - :math:`\mathrm{DAF}_{\max}`; maximum derived allele frequency in a
+       subwindow
+     - SFS
+     - `Kern & Schrider 2018 <https://doi.org/10.1534/g3.118.200262>`_
    * - ``k_counts``
      - Number of distinct haplotypes
+     - Haplotype structure
+     - `Kern & Schrider 2018 <https://doi.org/10.1534/g3.118.200262>`_
    * - ``h1``
-     - Garud's :math:`H_1`
+     - Garud's :math:`H_1`; haplotype homozygosity
+     - Haplotype structure
+     - `Garud et al. 2015 <https://doi.org/10.1371/journal.pgen.1005004>`_
    * - ``h12``
-     - Garud's :math:`H_{12}`
+     - Garud's :math:`H_{12}`; frequencies of the first and second most common
+       haplotypes, modified to use an 80% identity threshold
+     - Haplotype structure
+     - `Garud et al. 2015 <https://doi.org/10.1371/journal.pgen.1005004>`_; `Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_
    * - ``h2_h1``
      - Garud's :math:`H_2/H_1`
-   * - ``zns``
-     - Kelly's :math:`Z_{nS}`
-   * - ``omega_max``
-     - Kim & Nielsen's :math:`\omega_{max}`
+     - Haplotype structure
+     - `Garud et al. 2015 <https://doi.org/10.1371/journal.pgen.1005004>`_
    * - ``haf``
-     - Haplotype allele frequency (HAF-top)
-   * - ``max_fda``
-     - Maximum derived allele frequency in window
+     - Haplotype allele frequency, reporting only the summed upper 10% of the
+       sorted scores (HAF-top)
+     - Haplotype structure
+     - `Ronen et al. 2015 <https://doi.org/10.1371/journal.pgen.1005527>`_; `Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_
    * - ``dist_var``
-     - Variance of pairwise haplotype distances
+     - :math:`\mathrm{Var}(d_{ij})`; variance of the distribution of pairwise
+       haplotype mismatch distances within a subwindow
+     - Haplotype structure
+     - `Kern & Schrider 2018 <https://doi.org/10.1534/g3.118.200262>`_
    * - ``dist_skew``
-     - Skewness of pairwise haplotype distances
+     - :math:`\mathrm{Skew}(d_{ij})`; skewness of the same distribution
+     - Haplotype structure
+     - `Kern & Schrider 2018 <https://doi.org/10.1534/g3.118.200262>`_
    * - ``dist_kurtosis``
-     - Kurtosis of pairwise haplotype distances
+     - :math:`\mathrm{Kurt}(d_{ij})`; excess kurtosis of the same distribution
+     - Haplotype structure
+     - `Kern & Schrider 2018 <https://doi.org/10.1534/g3.118.200262>`_
+   * - ``zns``
+     - Kelly's :math:`Z_{nS}`; average linkage disequilibrium (:math:`r^2`)
+       between segregating sites
+     - Linkage disequilibrium
+     - `Kelly 1997 <https://doi.org/10.1093/genetics/146.3.1197>`_
+   * - ``omega_max``
+     - :math:`\omega_{\max}`; maximum LD between selected and flanking regions
+     - Linkage disequilibrium
+     - `Kim & Nielsen 2004 <https://doi.org/10.1534/genetics.103.025387>`_
+   * - ``ncd1``
+     - NCD1; non-central deviation of the SFS from neutrality
+     - SFS (balancing selection)
+     - `Bitarello et al. 2018 <https://doi.org/10.1093/gbe/evy054>`_
 
-**SNP-based statistics** — computed per variant and normalised by frequency
-bin:
+**SNP-based statistics**
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 80
+   :widths: 16 40 20 24
 
    * - Name
      - Description
+     - Summarises
+     - Reference
    * - ``ihs``
-     - Integrated haplotype score (iHS)
+     - Integrated haplotype score
+     - Haplotype structure
+     - `Voight et al. 2006 <https://doi.org/10.1371/journal.pbio.0040072>`_
    * - ``delta_ihh``
-     - :math:`\Delta iHH`
+     - :math:`\Delta\text{-}iHH`; absolute iHH difference between ancestral and
+       derived alleles
+     - Haplotype structure
+     - `Grossman et al. 2010 <https://doi.org/10.1126/science.1183863>`_
    * - ``nsl``
-     - Number of segregating sites by length (:math:`nS_L`)
+     - :math:`nS_L`; number of segregating sites by length
+     - Haplotype structure
+     - `Ferrer-Admetlla et al. 2014 <https://doi.org/10.1093/molbev/msu077>`_
    * - ``isafe``
-     - iSAFE sweep-focal SNP score
+     - Integrated selection of allele favoured by evolution
+     - Haplotype structure
+     - `Akbari et al. 2018 <https://doi.org/10.1038/nmeth.4606>`_
+   * - ``hscan``
+     - Average pairwise haplotype homozygosity tract length
+     - Haplotype structure
+     - `Schlamp et al. 2016 <https://doi.org/10.1111/mec.13485>`_
    * - ``dind`` / ``dind_high_low``
-     - DIND (derived-background diversity ratio)
-   * - ``highfreq`` / ``high_freq``
-     - High-frequency derived allele statistic
-   * - ``lowfreq`` / ``low_freq``
-     - Low-frequency derived allele statistic
+     - Derived intra-allelic nucleotide diversity
+     - Diversity on derived background
+     - `Barreiro et al. 2009 <https://doi.org/10.1371/journal.pgen.1000562>`_
    * - ``s_ratio``
-     - S-ratio (singletons vs high-frequency variants)
+     - Segregating sites ratio
+     - Diversity on derived background
+     - `Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_
+   * - ``low_freq`` / ``lowfreq``
+     - Low-frequency alleles on derived background
+     - Diversity on derived background
+     - `Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_
+   * - ``high_freq`` / ``highfreq``
+     - High-frequency alleles on derived background
+     - Diversity on derived background
+     - `Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_
    * - ``hapdaf_o``
-     - HapDAF observed
+     - Haplotype-derived allele frequency (old)
+     - SFS
+     - `Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_
    * - ``hapdaf_s``
-     - HapDAF simulated
+     - Haplotype-derived allele frequency (standing)
+     - SFS
+     - `Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_
+   * - ``beta``
+     - :math:`\beta^{(1)}`; correlation of allele frequency with local
+       polymorphism
+     - SFS (balancing selection)
+     - `Siewert & Voight 2020 <https://doi.org/10.1093/gbe/evaa013>`_
+   * - ``beta_t``
+     - :math:`\beta^{(1)*}_{(std)}`; standardised form of the above
+     - SFS (balancing selection)
+     - `Siewert & Voight 2020 <https://doi.org/10.1093/gbe/evaa013>`_
 
-Additional statistics (Python API)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. note::
 
-The following statistics are implemented in ``flexsweep.fv_v2`` but are not
-accessible via the ``stats=`` argument. They must be called directly from the
+   ``ihs`` and ``nsl`` are computed with `scikit-allel
+   <https://scikit-allel.readthedocs.io/>`_; every other statistic is a Numba
+   or NumPy vectorised implementation. ``delta_ihh`` is computed together with
+   ``ihs`` and is present in the output, but it is excluded from the default
+   CNN feature set.
+
+Statistics available through other modules
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The composite sweep statistics below are not selectable through the ``stats``
+argument of the feature-vector pipeline. They are available through the
+standalone outlier scan (see :doc:`scan`) and can be called directly from the
 Python API (see :doc:`api` for full signatures).
 
-**SFS-based neutrality tests:**
-
 .. list-table::
    :header-rows: 1
-   :widths: 25 75
+   :widths: 16 24 36 24
 
-   * - Function
+   * - Statistic
+     - ``scan`` key / function
      - Description
-   * - ``achaz_y``
-     - Achaz's :math:`Y` (`Achaz 2008 <https://doi.org/10.1534/genetics.107.082198>`_)
-   * - ``zeng_e``
-     - Zeng's :math:`E` (`Zeng et al. 2006 <https://doi.org/10.1534/genetics.106.061432>`_)
-   * - ``fuli_f_star``
-     - Fu & Li's :math:`F^*` (`Fu & Li 1993 <https://doi.org/10.1093/genetics/133.3.693>`_)
-   * - ``fuli_f``
-     - Fu & Li's :math:`F`
-   * - ``fuli_d_star``
-     - Fu & Li's :math:`D^*`
-   * - ``fuli_d``
-     - Fu & Li's :math:`D`
-
-**Composite sweep statistics:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 25 75
-
-   * - Function
-     - Description
-   * - ``compute_t_m``
-     - LASSI :math:`T` and :math:`m` statistics
-       (`Harris & DeGiorgio 2020 <https://doi.org/10.1093/molbev/msaa115>`_)
-   * - ``mu_stat``
-     - RAiSD :math:`\mu` statistic
-       (`Alachiotis & Pavlidis 2018 <https://doi.org/10.1038/s42003-018-0085-8>`_)
-
-**Balancing selection:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 25 75
-
-   * - Function
-     - Description
-   * - ``run_beta_window``
-     - :math:`\beta^{(1)*}_{(std)}`
-       (`Siewert & Voight 2020 <https://doi.org/10.1093/gbe/evaa013>`_)
-   * - ``ncd1``
-     - NCD1 (`Bitarello et al. 2018 <https://doi.org/10.1093/gbe/evy054>`_)
+     - Reference
+   * - LASSI :math:`T`, :math:`\hat{m}`
+     - ``lassi`` / ``compute_t_m``
+     - Likelihood-based detection of selective sweeps using haplotype structure
+     - `Harris & DeGiorgio 2020 <https://doi.org/10.1093/molbev/msaa115>`_
+   * - RAiSD :math:`\mu`
+     - ``raisd`` / ``mu_stat``
+     - Composite detection of selective sweeps using SFS, LD, and diversity
+     - `Alachiotis & Pavlidis 2018 <https://doi.org/10.1038/s42003-018-0085-8>`_
 
 
 Selecting statistics
@@ -290,20 +393,74 @@ Recombination-rate stratified normalisation
 By default, SNP statistics are normalised within frequency bins only. When
 ``r_bins`` is provided, normalisation is additionally stratified by
 recombination rate — a separate mean and standard deviation is computed for
-each recombination-rate stratum defined by the breakpoints.
+each recombination-rate stratum defined by the breakpoints. Stratifying jointly
+by allele frequency and recombination rate addresses the spurious correlation
+of haplotype-based statistics with the local recombination rate
+(`Johnson & Voight 2018 <https://doi.org/10.1038/s41559-018-0478-6>`_), making
+predictions more robust to recombination-rate discrepancies between the
+training and the tested sets.
 
-``r_bins`` accepts a list of breakpoints in cM/Mb (e.g. ``[1, 5, 10]``
-creates four strata: <1, 1–5, 5–10, >10 cM/Mb). A recombination map must
-also be supplied. The ``r_bins`` column is dropped from the output feature
-matrix so the feature dimension stays unchanged regardless of whether
+``r_bins`` accepts a list of breakpoints in cM/Mb; ``n`` breakpoints define
+``n + 1`` strata. A recombination map must also be supplied. The same units
+apply to both paths — per-base-pair rates from simulations are converted to
+cM/Mb internally. The ``r_bins`` column is dropped from the output feature
+matrix, so the feature dimension stays unchanged regardless of whether
 stratification is used.
+
+Deriving the breakpoints
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Boundaries should be defined from the empirical recombination-rate
+distribution of the organism under study. ``flexsweep recombination-bins``
+slides the analysis windows across the VCFs, interpolates the local rate from
+the recombination map, discards windows below ``--min_rate``, and reports the
+quantile breakpoints:
+
+.. code-block:: bash
+
+    flexsweep recombination-bins \
+        --vcf_path yri_vcfs \
+        --recombination_map decode_sexavg_2019.txt \
+        --bins 10 \
+        --min_rate 0.01
+
+With ``--bins 10`` the command returns nine decile breakpoints plus the
+rounded-up maximum rate.
+
+Human recombination bins
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+For human data we derived the boundaries from the `deCODE recombination map
+<https://doi.org/10.1126/science.aau1043>`_, interpolating genome-wide 1.2 Mb
+regions to obtain 10 recombination bins, filtering regions below 0.01 cM/Mb
+before the binning process:
 
 .. code-block:: python
 
+    import flexsweep as fs
+
+    # deCODE-derived boundaries used for the 1000GP populations
+    decode_r_bins = [0.37, 0.55, 0.71, 0.87, 1.05, 1.26, 1.53, 1.88, 2.46, 6.1]
+
     df = fs.summary_statistics(
         "./simulations",
-        recombination_map="decode_like_map.csv",
-        r_bins=[1, 5, 10],
+        recombination_map=fs.DECODE_MAP,
+        r_bins=decode_r_bins,
+        min_rate=0.01,
+        nthreads=8,
+    )
+
+The identical ``r_bins`` and ``min_rate`` values must be passed to the VCF run,
+so that simulated and empirical statistics are standardised within matching
+strata:
+
+.. code-block:: python
+
+    df_vcf = fs.summary_statistics(
+        "./vcf_data",
+        vcf=True,
+        recombination_map=fs.DECODE_MAP,
+        r_bins=decode_r_bins,
         min_rate=0.01,
         nthreads=8,
     )

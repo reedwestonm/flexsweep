@@ -119,7 +119,16 @@ _LAZY_ATTRS = {
     "delayed": ("joblib", "delayed"),
     # Project modules
     "fv": (".fv", None),
+    "cnn_regressor": (".cnn_regressor", None),
+    "CNNRegressor": (".cnn_regressor", "CNNRegressor"),
+    "enrichment": (".enrichment", None),
+    "run_enrichment": (".enrichment", "run_enrichment"),
     "scan": (".scan", None),
+    "npe": (".npe", None),
+    "fit_npe": (".npe", "fit_npe"),
+    "predict_npe": (".npe", "predict_npe"),
+    "analyze_npe": (".npe", "analyze_npe"),
+    "plot_evaluation": (".npe", "plot_evaluation"),
     "polarize": (".polarize", None),
     "simulate_discoal": (".simulate_discoal", None),
     "utils": (".utils", None),
@@ -171,12 +180,20 @@ __all__ = [
     "multiprocessing",
     "cnn",
     "CNN",
+    "cnn_regressor",
+    "CNNRegressor",
     "rank_probabilities",
     "plot_sfs",
     "plot_diversity",
     "fv",
+    "npe",
+    "fit_npe",
+    "predict_npe",
+    "analyze_npe",
+    "plot_evaluation",
     "polarize",
     "simulate_discoal",
+    "enrichment",
     "__version__",
 ]
 
@@ -192,6 +209,7 @@ def __dir__():
 
 if TYPE_CHECKING:
     from .cnn import CNN as CNN
+    from .cnn_regressor import CNNRegressor as CNNRegressor
     from .fv import summary_statistics as summary_statistics
 else:
     _cnn_module_proxy = _LazyModule(".cnn", __name__)

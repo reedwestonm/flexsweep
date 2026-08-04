@@ -19,7 +19,7 @@ Empirical p-values
 ~~~~~~~~~~~~~~~~~~
 
 For each statistic an empirical p-value is assigned following the
-empirical outlier approach (Akey 2009):
+empirical outlier approach (`Akey 2009 <https://doi.org/10.1101/gr.086652.108>`_):
 
 .. math::
 
@@ -61,63 +61,66 @@ One score per polymorphic site. No sliding window.
      - Description
    * - ``ihs``
      - ``ihs``
-     - Integrated haplotype score (Voight et al. 2006). Detects incomplete
+     - Integrated haplotype score (`Voight et al. 2006 <https://doi.org/10.1371/journal.pbio.0040072>`_). Detects incomplete
        hard sweeps via extended haplotype homozygosity. Normalized within
        DAF bins. Configurable: ``min_maf`` (0.05), ``include_edges`` (False),
        ``gap_scale`` (20000), ``max_gap`` (200000).
    * - ``nsl``
      - ``nsl``
-     - Number of segregating sites by length (Ferrer-Admetlla et al. 2014).
+     - Number of segregating sites by length (`Ferrer-Admetlla et al. 2014 <https://doi.org/10.1093/molbev/msu077>`_).
        Robust alternative to iHS; no genetic map required. Normalized within
        DAF bins. Configurable: ``min_maf`` (0.05).
    * - ``isafe``
      - ``isafe``
-     - Identifying the favored allele in a sweep (Akbari et al. 2018).
+     - Identifying the favored allele in a sweep (`Akbari et al. 2018 <https://doi.org/10.1038/nmeth.4606>`_).
        Pinpoints the causal mutation within a detected sweep region. Runs on
        non-overlapping regions. Configurable: ``region_size_bp`` (1000000),
        ``isafe_window`` (300), ``isafe_step`` (150), ``top_k`` (1),
        ``max_rank`` (15).
    * - ``dind``
      - ``dind``
-     - Derived intra-allelic nucleotide diversity ratio (Barreiro et al.
-       2009). Configurable: ``window_size`` (50000), ``min_focal_freq``
+     - Derived intra-allelic nucleotide diversity ratio (`Barreiro et al.
+       2009 <https://doi.org/10.1371/journal.pgen.1000562>`_). Configurable: ``window_size`` (50000), ``min_focal_freq``
        (0.25), ``max_focal_freq`` (0.95).
    * - ``high_freq``
      - ``high_freq``
      - Frequency of high-frequency derived variants in a focal window
-       (Lauterbur et al. 2023). Configurable: ``window_size`` (50000),
+       (`Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_). Configurable: ``window_size`` (50000),
        ``min_focal_freq`` (0.25), ``max_focal_freq`` (0.95).
    * - ``low_freq``
      - ``low_freq``
      - Frequency of low-frequency derived variants in a focal window
-       (Lauterbur et al. 2023). Configurable: ``window_size`` (50000),
+       (`Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_). Configurable: ``window_size`` (50000),
        ``min_focal_freq`` (0.25), ``max_focal_freq`` (0.95).
    * - ``s_ratio``
      - ``s_ratio``
      - Ratio of segregating sites on derived vs. ancestral haplotypes
-       (Lauterbur et al. 2023). Configurable: ``window_size`` (50000),
+       (`Lauterbur et al. 2023 <https://doi.org/10.1093/molbev/msad139>`_). Configurable: ``window_size`` (50000),
        ``min_focal_freq`` (0.25), ``max_focal_freq`` (0.95).
    * - ``hapdaf_o``
      - ``hapdaf_o``
-     - Haplotype-derived allele frequency, other background (Lauterbur et al.
-       2023). Configurable: ``window_size`` (50000), ``min_focal_freq``
+     - Haplotype-derived allele frequency, other background (`Lauterbur et al.
+       2023 <https://doi.org/10.1093/molbev/msad139>`_). Configurable: ``window_size`` (50000), ``min_focal_freq``
        (0.25), ``max_focal_freq`` (0.95), ``max_ancest_freq`` (0.25),
        ``min_tot_freq`` (0.25).
    * - ``hapdaf_s``
      - ``hapdaf_s``
-     - Haplotype-derived allele frequency, sweep background (Lauterbur et al.
-       2023). Stricter ancestral-frequency thresholds than ``hapdaf_o``.
+     - Haplotype-derived allele frequency, sweep background (`Lauterbur et al.
+       2023 <https://doi.org/10.1093/molbev/msad139>`_). Stricter ancestral-frequency thresholds than ``hapdaf_o``.
        Configurable: ``window_size`` (50000), ``min_focal_freq`` (0.25),
        ``max_focal_freq`` (0.95), ``max_ancest_freq`` (0.10),
        ``min_tot_freq`` (0.10).
    * - ``hscan``
      - ``hscan``
-     - Average pairwise haplotype homozygosity tract length H(x) (Messer
-       2015). Measures the mean shared haplotype block length across all
+     - Average pairwise haplotype homozygosity tract length H(x)
+       (`h-scan <https://messerlab.org/resources/>`_, Messer; evaluated in
+       `Schlamp et al. 2016 <https://doi.org/10.1111/mec.13485>`_). Measures
+       the mean shared haplotype block length across all
        sample pairs; detects hard and soft sweeps. Configurable:
        ``max_gap`` (200000), ``dist_mode`` (0), ``hscan_step`` (1).
-        (Use ``hscan_step`` (not ``step``) to control scan resolution.
-          ``step`` is a shared SNP-window parameter and is not used by hscan)
+
+       Use ``hscan_step`` (not ``step``) to control scan resolution; ``step``
+       is a shared SNP-window parameter and is not used by hscan.
 
 Sliding SNP-window statistics
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -137,42 +140,36 @@ One score per window of a fixed number of SNPs.
      - ``haf``
      - 201 SNPs
      - 10 SNPs
-     - Haplotype allele frequency (Ronen et al. 2015). Mean pairwise
+     - Haplotype allele frequency (`Ronen et al. 2015 <https://doi.org/10.1371/journal.pgen.1005527>`_). Mean pairwise
        haplotype similarity across a SNP window. Configurable via shared
        ``w_size`` and ``step``.
    * - ``h12``
      - ``h12``
      - 200 SNPs
      - 10 SNPs
-     - H12 haplotype homozygosity (Garud et al. 2015). Combines the two most
+     - H12 haplotype homozygosity (`Garud et al. 2015 <https://doi.org/10.1371/journal.pgen.1005004>`_). Combines the two most
        common haplotype frequencies. Configurable via shared ``w_size`` and
        ``step``.
    * - ``garud``
      - ``h12``
      - 200 SNPs
      - 10 SNPs
-     - Full Garud statistics: H1, H12, H2/H1 (Garud et al. 2015).
+     - Full Garud statistics: H1, H12, H2/H1 (`Garud et al. 2015 <https://doi.org/10.1371/journal.pgen.1005004>`_).
        Configurable via shared ``w_size`` and ``step``.
    * - ``lassi``
      - ``T_m``
      - 201 SNPs
      - 10 SNPs
      - Composite likelihood sweep scan using the haplotype frequency spectrum
-       (DeGiorgio et al. 2014). Configurable: ``K_truncation`` (10),
+       (`Harris & DeGiorgio 2020 <https://doi.org/10.1093/molbev/msaa115>`_).
+       Configurable: ``K_truncation`` (10),
        ``sweep_mode`` (4), and shared ``w_size``, ``step``.
-   * - ``lassip``
-     - ``Lambda``
-     - 201 SNPs
-     - 10 SNPs
-     - Spatially-aware saltiLASSI (DeGiorgio & Szpiech 2022). Configurable:
-       ``K_truncation`` (10), ``sweep_mode`` (4), ``max_extend`` (100000),
-       ``n_A`` (100), and shared ``w_size``, ``step``.
    * - ``raisd``
      - ``mu_total``
      - 50 SNPs
      - 1 SNP
      - RAiSD μ composite statistic combining SFS, SNP density variation, and
-       LD (Alachiotis & Pavlidis 2018). Configurable: ``window_size`` (50).
+       LD (`Alachiotis & Pavlidis 2018 <https://doi.org/10.1038/s42003-018-0085-8>`_). Configurable: ``window_size`` (50).
        Additional output columns: ``mu_var``, ``mu_sfs``, ``mu_ld``.
 
 Sliding bp-window statistics
@@ -195,7 +192,7 @@ One score per physical window. All configurable via shared ``w_size_bp``
      - ``tajima_d``
      - 1 Mb
      - 10 kb
-     - Tajima's D (Tajima 1989). SFS-based test; negative values signal
+     - Tajima's D (`Tajima 1989 <https://doi.org/10.1093/genetics/123.3.585>`_). SFS-based test; negative values signal
        directional selection. Signed stat — ranked by ``abs(value)``.
    * - ``pi``
      - ``pi``
@@ -211,23 +208,23 @@ One score per physical window. All configurable via shared ``w_size_bp``
      - ``fay_wu_h``
      - 1 Mb
      - 10 kb
-     - Fay & Wu's H (Fay & Wu 2000). Sensitive to high-frequency derived
+     - Fay & Wu's H (`Fay & Wu 2000 <https://doi.org/10.1093/genetics/155.3.1405>`_). Sensitive to high-frequency derived
        alleles. Signed stat — ranked by ``abs(value)``.
    * - ``zeng_e``
      - ``zeng_e``
      - 1 Mb
      - 10 kb
-     - Zeng's E (Zeng et al. 2006). Signed stat — ranked by ``abs(value)``.
+     - Zeng's E (`Zeng et al. 2006 <https://doi.org/10.1534/genetics.106.061432>`_). Signed stat — ranked by ``abs(value)``.
    * - ``achaz_y``
      - ``achaz_y``
      - 1 Mb
      - 10 kb
-     - Achaz Y (Achaz 2009). Robust to sequencing errors.
+     - Achaz Y (`Achaz 2009 <https://doi.org/10.1534/genetics.109.104042>`_). Robust to sequencing errors.
    * - ``fuli_d``
      - ``fuli_d``
      - 1 Mb
      - 10 kb
-     - Fu & Li's D (Fu & Li 1993).
+     - Fu & Li's D (`Fu & Li 1993 <https://doi.org/10.1093/genetics/133.3.693>`_).
    * - ``fuli_d_star``
      - ``fuli_d_star``
      - 1 Mb
@@ -237,7 +234,7 @@ One score per physical window. All configurable via shared ``w_size_bp``
      - ``fuli_f``
      - 1 Mb
      - 10 kb
-     - Fu & Li's F (Fu & Li 1993).
+     - Fu & Li's F (`Fu & Li 1993 <https://doi.org/10.1093/genetics/133.3.693>`_).
    * - ``fuli_f_star``
      - ``fuli_f_star``
      - 1 Mb
@@ -253,33 +250,34 @@ One score per physical window. All configurable via shared ``w_size_bp``
      - ``omega_max``
      - 100 kb
      - 10 kb
-     - Kim & Nielsen's ω (Kim & Nielsen 2004). LD patterns around a putative
+     - Kim & Nielsen's ω (`Kim & Nielsen 2004 <https://doi.org/10.1534/genetics.103.025387>`_). LD patterns around a putative
        sweep centre.
    * - ``zns``
      - ``zns``
      - 100 kb
      - 10 kb
-     - Kelly's Z\ :sub:`nS` (Kelly 1997). Mean pairwise r² across all SNP
+     - Kelly's Z\ :sub:`nS` (`Kelly 1997 <https://doi.org/10.1093/genetics/146.3.1197>`_). Mean pairwise r² across all SNP
        pairs in a window.
    * - ``beta``
      - ``beta1``
      - 50 kb
      - 5 kb
-     - Beta1 statistic for balancing selection (Siewert & Voight 2017).
+     - Beta1 statistic for balancing selection (`Siewert & Voight 2017
+       <https://doi.org/10.1093/molbev/msx209>`_; standardised form in
+       `Siewert & Voight 2020 <https://doi.org/10.1093/gbe/evaa013>`_).
        Configurable: ``m`` (0.1).
    * - ``ncd``
      - ``ncd1``
      - 3 kb
      - 1.5 kb
-     - NCD1 for balancing selection (Bitarello et al. 2018). Configurable:
+     - NCD1 for balancing selection (`Bitarello et al. 2018 <https://doi.org/10.1093/gbe/evy054>`_). Configurable:
        ``tf`` (0.5), ``w`` (3000), ``minIS`` (2).
 
 Window mode
 ~~~~~~~~~~~
 
-SNP-count windows are required for H12, LASSI, saltiLASSI, and RAiSD —
-physical windows confound SNP density with haplotype diversity for those
-statistics. SFS-based statistics (Tajima's D, Fay-Wu H, etc.) use physical
+SNP-count windows are required for H12, LASSI, and RAiSD — physical windows
+confound SNP density with haplotype diversity for those statistics. SFS-based statistics (Tajima's D, Fay-Wu H, etc.) use physical
 bp windows by default.
 
 With the default ``window_mode="auto"``, each statistic uses its built-in
@@ -348,7 +346,7 @@ ensuring p-values reflect the true genome-wide distribution.
     flexsweep scan \
         --vcf_path data/vcf/ \
         --out_prefix results/YRI \
-        --stats ihs,nsl,h12,lassip \
+        --stats ihs,nsl,h12 \
         --recombination_map data/decode_sexavg_2019.txt.gz \
         --nthreads 4
 
@@ -375,7 +373,7 @@ CLI reference
      - Output prefix. Writes ``{PREFIX}.{stat}.txt`` for each stat.
    * - ``--stats LIST``
      - required
-     - Comma-separated stat keys, e.g. ``ihs,nsl,h12,lassip``.
+     - Comma-separated stat keys, e.g. ``ihs,nsl,h12,raisd``.
    * - ``--w_size INT``
      - 201
      - SNP-count window size for SNP-mode stats.
@@ -411,15 +409,12 @@ CLI reference
      - Number of recombination rate bins for joint DAF × recomb
        normalization. Set to 10 to match Johnson et al. Requires
        ``--recombination_map``.
-   * - ``--max_extend FLOAT``
-     - 100000
-     - saltiLASSI spatial decay cutoff in bp.
    * - ``--K_truncation INT``
      - 10
-     - K truncation for LASSI/saltiLASSI (number of HFS classes).
+     - K truncation for LASSI (number of HFS classes).
    * - ``--sweep_mode INT``
      - 4
-     - Sweep spectral model for LASSI/saltiLASSI (1–5; 4 = Gaussian decay).
+     - Sweep spectral model for LASSI (1–5; 4 = Gaussian decay).
    * - ``--raisd_window INT``
      - 50
      - SNP window size for RAiSD.
@@ -437,11 +432,11 @@ Examples:
         --out_prefix results/YRI.chr22 \
         --stats ihs,nsl
 
-    # H12 + saltiLASSI + RAiSD with custom SNP window
+    # H12 + RAiSD with custom SNP window
     flexsweep scan \
         --vcf_path YRI.chr22.vcf.gz \
         --out_prefix results/YRI.chr22 \
-        --stats h12,lassip,raisd \
+        --stats h12,raisd \
         --w_size 400 \
         --nthreads 4
 
@@ -463,7 +458,7 @@ Examples:
     flexsweep scan \
         --vcf_path data/vcf/ \
         --out_prefix results/YRI \
-        --stats ihs,nsl,h12,lassip \
+        --stats ihs,nsl,h12 \
         --recombination_map data/decode_sexavg_2019.txt.gz \
         --n_r_bins 10 \
         --nthreads 4
@@ -500,13 +495,13 @@ Python API
     results = scan(
         "data/vcf/",
         "results/YRI",
-        stats=["ihs", "nsl", "h12", "lassip"],
+        stats=["ihs", "nsl", "h12"],
         min_maf=0.05,
         recombination_map="data/decode_sexavg_2019.txt.gz",
         nthreads=4,
     )
-    # results["ihs"]    → Polars DataFrame, SNP resolution, ihs_pvalue column
-    # results["lassip"] → Polars DataFrame, window resolution, Lambda_pvalue column
+    # results["ihs"]   → Polars DataFrame, SNP resolution, ihs_pvalue column
+    # results["raisd"] → Polars DataFrame, window resolution, mu_total_pvalue column
 
     # Joint DAF × recomb normalization
     results = scan(
@@ -523,9 +518,8 @@ Python API
     results = scan(
         "data/vcf/",
         "results/YRI",
-        stats=["lassip", "raisd", "hscan"],
+        stats=["raisd", "hscan"],
         config={
-            "lassip": {"max_extend": 5e4, "K_truncation": 15},
             "raisd":  {"window_size": 100},
             "hscan":  {"hscan_step": 5, "max_gap": 100_000},
         },
@@ -561,8 +555,8 @@ Each statistic writes one tab-separated file ``{out_prefix}.{stat}.txt``:
        more extreme. Signed stats (iHS, nSL, Tajima's D, Fay-Wu H, Zeng E)
        are ranked by ``abs(value)``.
 
-Additional columns vary by statistic (e.g., ``h2_h1`` for garud, ``m`` and
-``A`` for lassip, ``mu_var``, ``mu_sfs``, ``mu_ld`` for raisd).
+Additional columns vary by statistic (e.g., ``h2_h1`` for garud, ``m`` for
+lassi, ``mu_var``, ``mu_sfs``, ``mu_ld`` for raisd).
 
 
 Scan results visualization
@@ -589,18 +583,18 @@ regional zoom plots directly from ``scan()`` output or saved TSV files.
 
     # Stacked multi-statistic panels — rank columns resolved automatically
     plot_scan(
-        {k: results[k] for k in ["ihs", "h12", "lassip", "raisd"]},
+        {k: results[k] for k in ["ihs", "h12", "raisd"]},
         pvalue=True,
         out="results/YRI.multi.png",
     )
-    # Plots: ihs, h12, Lambda (lassip), mu_total (raisd)
+    # Plots: ihs, h12, mu_total (raisd)
 
 **Regional zoom plot** (raw + p-value side by side):
 
 .. code-block:: python
 
     plot_scan(
-        {k: results[k] for k in ["ihs", "lassip"]},
+        {k: results[k] for k in ["ihs", "raisd"]},
         chrom="22",
         center=17_000_000,
         window_bp=500_000,
@@ -612,8 +606,8 @@ regional zoom plots directly from ``scan()`` output or saved TSV files.
 .. code-block:: python
 
     plot_scan(
-        ["results/YRI.ihs.txt", "results/YRI.lassip.txt"],
-        stat_cols=["ihs", "Lambda"],   # must match column name in file
+        ["results/YRI.ihs.txt", "results/YRI.raisd.txt"],
+        stat_cols=["ihs", "mu_total"],   # must match column name in file
         pvalue=True,
         out="results/YRI.multi.png",
     )
@@ -698,14 +692,15 @@ References
   Genetics*, 11, e1005004.
 
 **h-scan**
-  Schlamp, et al. (2016) Evaluating the performance of selection scans to detect selective sweeps in domestic dogs.
+  Messer, P.W. h-scan: a program for detecting selective sweeps from patterns of
+  homozygosity tract lengths. https://messerlab.org/resources/
+
+  Schlamp, F., van der Made, J., Stambler, R., Chesebrough, L., Boyko, A.R. and
+  Messer, P.W. (2016) Evaluating the performance of selection scans to detect
+  selective sweeps in domestic dogs. *Molecular Ecology*, 25, 342-356.
 
 **LASSI**
   Harris, A. and DeGiorgio. (2020) A Likelihood Approach for Uncovering Selective Sweep Signatures from haplotype Data
-
-**saltiLASSI**
-  DeGiorgio, M. and Szpiech, Z.A. (2022) A spatially aware likelihood test to detect sweeps
-  from haplotype distributions. *PLOS Genetics*, 18, e1010134.
 
 **RAiSD**
   Alachiotis, N. and Pavlidis, P. (2018) RAiSD detects positive selection based on multiple

@@ -147,6 +147,7 @@ class Simulator:
         eaf=[0.5, 1],
         s=[0.01, 0.05],
         time=[0, 5000],
+        x=0.5,
         nthreads=1,
         ne=int(1e4),
         fixed_ratio=0.1,
@@ -182,6 +183,11 @@ class Simulator:
         :param int ne: Effective population size :math:`N_e`. **Default:** ``10000``.
         :param list time: Sweep time window in generations ``[min, max]``.
             **Default:** ``[0, 5000]``.
+        :param x: Sweep position along the locus as a fraction in ``[0, 1]``
+            (discoal ``-x``). A scalar fixes the position for every replicate;
+            a two-element range ``[min, max]`` draws a random position uniformly
+            per sweep replicate. **Default:** ``0.5``.
+        :type x: float or list
         :param int nthreads: Maximum joblib workers. **Default:** ``1``.
         :param float fixed_ratio: Fraction of complete sweeps within hard/soft sets.
             **Default:** ``0.1``.
@@ -211,6 +217,7 @@ class Simulator:
         self.f_t = eaf
         self.time = time
         self.s = s
+        self.x = x
         self.fixed_ratio = fixed_ratio
         self.reset_simulations = False
         self.demes_data = None
@@ -380,7 +387,7 @@ class Simulator:
 
         Returns:
             pl.DataFrame: Parameters with columns
-                ['iter', 'mu', 'r', 'eaf', 'saf', 's', 't', 'model'].
+                ['iter', 'mu', 'r', 'eaf', 'saf', 's', 't', 'pos', 'model'].
         """
 
         _ = self.check_inputs()
@@ -398,12 +405,21 @@ class Simulator:
         rho_sweep = scaling * r_sweep
 
         sel_time = np.random.uniform(
-            self.time[0], self.time[1], self.num_simulations
+            self.time[0], self.time[-1], self.num_simulations
         ) / (4 * self.ne)
 
         sel_coef = (
-            np.random.uniform(self.s[0], self.s[1], self.num_simulations) * 2 * self.ne
+            np.random.uniform(self.s[0], self.s[-1], self.num_simulations) * 2 * self.ne
         )
+
+        # Sweep position along the locus (discoal -x). Fixed if x is a scalar,
+        # drawn uniformly per replicate if x is a [min, max] range.
+        if isinstance(self.x, (list, tuple, np.ndarray)):
+            sweep_position = np.random.uniform(
+                self.x[0], self.x[-1], self.num_simulations
+            )
+        else:
+            sweep_position = np.repeat(float(self.x), self.num_simulations)
 
         num_hard = int(self.num_simulations * 0.5)
         num_soft = self.num_simulations - num_hard
@@ -412,13 +428,13 @@ class Simulator:
         hard_complete_f_i = np.repeat(0, int(num_hard * self.fixed_ratio))
 
         hard_incomplete_f_t = np.random.uniform(
-            self.f_t[0], self.f_t[1], int(num_hard * (1 - self.fixed_ratio))
+            self.f_t[0], self.f_t[-1], int(num_hard * (1 - self.fixed_ratio))
         )
         hard_incomplete_f_i = np.repeat(0, int(num_hard * (1 - self.fixed_ratio)))
 
         soft_complete_f_t = np.repeat(1, int(num_soft * self.fixed_ratio))
         soft_complete_f_i = np.random.uniform(
-            self.f_i[0], self.f_i[1], int(num_soft * self.fixed_ratio)
+            self.f_i[0], self.f_i[-1], int(num_soft * self.fixed_ratio)
         )
 
         soft_incomplete_f_t = np.random.uniform(
@@ -454,6 +470,7 @@ class Simulator:
                 "saf": 0.0,
                 "s": 0.0,
                 "t": 0.0,
+                "pos": 0.0,
                 "model": "neutral",
             }
         )
@@ -467,6 +484,7 @@ class Simulator:
                 "saf": saf,
                 "s": sel_coef / (2 * self.ne),
                 "t": 4 * self.ne * sel_time,
+                "pos": sweep_position,
                 "model": "sweep",
             }
         )
@@ -523,6 +541,7 @@ class Simulator:
                     2 * self.ne * v["s"],
                     discoal_demes,
                     v["iter"],
+                    v["pos"],
                 )
                 for (i, v) in enumerate(
                     df_params.filter(pl.col("model") != "neutral").iter_rows(
@@ -587,6 +606,7 @@ class Simulator:
         s,
         discoal_demes,
         _iter=1,
+        x=0.5,
     ):
         """
         Run a single sweep simulation
@@ -600,6 +620,7 @@ class Simulator:
             s (float): Selection coefficient scaled by 2Ne.
             discoal_demes (str): Demography string.
             _iter (int, default=1): Iteration index.
+            x (float, default=0.5): Sweep position along the locus (discoal -x).
 
         Returns:
             str: Path to output gzipped ms file.
@@ -617,7 +638,9 @@ class Simulator:
             + str(theta)
             + " -r "
             + str(rho)
-            + " -x 0.5 -ws "
+            + " -x "
+            + str(x)
+            + " -ws "
             + str(t)
             + " -a "
             + str(s)
@@ -737,6 +760,7 @@ class Simulator:
                     2 * self.ne * v["s"],
                     discoal_demes,
                     v["iter"],
+                    v["pos"],
                 )
                 out.append(res)
 

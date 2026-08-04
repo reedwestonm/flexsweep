@@ -2,6 +2,7 @@ import math
 import os
 import click
 
+
 def parse_float_list(value):
     """Parse a comma-separated list of floats."""
     if value:
@@ -214,12 +215,48 @@ def simulator(
     simulator.simulate_batch()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WINDOWING SCHEMES for --windows / --centers (locus_length = 1.2e6, sweep @ 600 kb)
+# --windows = comma-list of window sizes (bp); --centers = comma-list of center
+# positions (bp). Omit --centers to use the uniform grid derived from --step.
+# Same flags apply to `fvs-discoal` (sims) and `fvs-vcf` (centers are sim-relative,
+# remapped per region). The five schemes used in the s/t bake-off:
+#
+#   base          --windows 100000
+#                 (uniform centers from --step 100000 -> 50k..1.15M)              12 x 1
+#
+#   ms            --windows 20000,50000,100000,200000,500000
+#                 (uniform centers from --step 100000)                            12 x 5
+#
+#   log_scale     --windows 2000,4000,8000,16000,32000,64000,128000,256000,512000
+#                 --centers 10000,30000,...,1190000  (range(10000,1200000,20000)) 60 x 9
+#
+#   log_distance  --windows 4000,16000,64000,256000
+#                 --centers 280000,440000,520000,560000,580000,600000,620000,
+#                           640000,680000,760000,920000  (log-dist radial @ 600k) 11 x 4
+#
+#   radial        --windows 4000,8000,16000,32000,64000,128000,256000,512000
+#                 --centers 600000  (single sweep center)                          1 x 8
+#
+#   caldas        Caldas et al. 2022 geometry (biorxiv 2022.07.19.500702), the
+#                 d x d subwindow cube with d = 14 rescaled to L = 1.2 Mb.
+#                 NOT a single call: summary_statistics applies ONE --centers to
+#                 ALL --windows (rectangular product, fv.py:1934), but Caldas
+#                 centers are SIZE-DEPENDENT (spacing = size/2, fanned on sweep).
+#                 => run ONCE PER size s_i, each with its own 21-center fan, then
+#                 hstack the 21 parquets on the index cols. Driver: scripts/caldas_geometry.
+#                   sizes (21, geometric lmin=1e3 -> L/11=109091, ratio 1.2644):
+#                     1000,1264,1599,2021,2556,3232,4086,5167,6533,8260,10445,
+#                     13206,16698,21114,26696,33755,42681,53966,68235,86278,109091
+#                   per size s: --centers = [600000 + (j-10)*(s/2) for j in 0..20]
+#                     (21 windows overlapping neighbours by half, fanned @ 600k)  21 x 21
+# ─────────────────────────────────────────────────────────────────────────────
 @cli.command()
 @click.option(
     "--simulations_path",
     type=str,
     required=True,
-    help="Directory containing neutral and sweeps discoal simulations."
+    help="Directory containing neutral and sweeps discoal simulations.",
 )
 @click.option(
     "--stats",
@@ -237,10 +274,10 @@ def simulator(
 )
 @click.option(
     "--windows",
-    type=float,
+    type=str,
     required=False,
-    default=int(1e5),
-    help="Window size to sliding windows over the simulated regions",
+    default="100000",
+    help="Comma-separated window size(s) in bp, e.g. 20000,50000,100000,200000,500000 (ms). See WINDOWING SCHEMES comment above.",
 )
 @click.option(
     "--step",
@@ -248,6 +285,13 @@ def simulator(
     required=False,
     default=int(1e5),
     help="Step size to sliding windows over the simulated regions",
+)
+@click.option(
+    "--centers",
+    type=str,
+    required=False,
+    default=None,
+    help="Comma-separated center position(s) in bp. Omit for the uniform grid from --step. See WINDOWING SCHEMES comment above.",
 )
 @click.option(
     "--locus_length",
@@ -289,6 +333,7 @@ def fvs_discoal(
     stats,
     windows,
     step,
+    centers,
     locus_length,
     r_bins,
     save_stats,
@@ -296,7 +341,6 @@ def fvs_discoal(
     nthreads,
     only_normalize,
 ):
-
     """
     Estimate summary statistics from discoal simulations and build feature vectors.
 
@@ -306,6 +350,8 @@ def fvs_discoal(
     import flexsweep as fs
 
     r_bins_list = parse_float_list(r_bins)
+    windows_list = parse_float_list(windows)
+    center_list = parse_float_list(centers)
 
     stats_list = stats.split(",") if stats is not None else None
 
@@ -314,7 +360,7 @@ def fvs_discoal(
             simulations_path,
             nthreads,
             center_list,
-            [windows],
+            windows_list,
             step,
             r_bins=r_bins_list,
             suffix=suffix,
@@ -327,8 +373,9 @@ def fvs_discoal(
             stats=stats_list,
             vcf=False,
             nthreads=nthreads,
-            windows=[windows],
+            windows=windows_list,
             step=step,
+            centers=center_list,
             locus_length=locus_length,
             recombination_map=None,
             r_bins=r_bins_list,
@@ -467,7 +514,7 @@ def fvs_vcf(
 
     stats_list = stats.split(",") if stats is not None else None
     if only_normalize:
-        fs.fv._normalize_raw_stats(
+        fs.fv.normalize_raw_stats(
             vcf_path,
             nthreads,
             center_list,
@@ -528,7 +575,7 @@ def fvs_vcf(
     type=float,
     default=0.01,
     required=False,
-    help="Minimun recombination rate (cM/Mb) to simulate",
+    help="Minimun recombination rate (cM/Mb)",
 )
 def recombination_bins(vcf_path, recombination_map, bins, window_size, step, min_rate):
     """
@@ -1404,85 +1451,143 @@ def enrichment(
     default=10,
     help="Number of random starts",
 )
-@click.option(
-    "--sort",
-    type=bool,
-    required=False,
-    default=False,
-    help="Sort MAF file before polarizing.",
-)
-@click.option(
-    "--split",
-    type=bool,
-    required=False,
-    default=False,
-    help="Splt MAF file before polarizing.",
-)
-@click.option(
-    "--contig",
-    type=str,
-    required=False,
-    default=None,
-    help="Reference contig to split",
-)
-def polarize(maf, vcf, outgroups, method, nrandom, sort, split, contig):
+def polarize(maf, vcf, outgroups, method, nrandom):
     """
     Polarize VCF using rust est-sfs refactor. MAF file anchored to the VCF specie will be used to parse outgroups information.
     Please cite: https://doi.org/10.1534/genetics.118.301120
 
-    Note your system must have access to rustc and cargo to automatically compile the feature.
+    Polarization is a streaming merge-join, so both inputs must contain a SINGLE reference
+    contig, sorted by position, and must name that contig identically. Prepare them first:
+
+    \b
+        flexsweep split-maf --maf primates.maf.gz --contig CM000663.2
+        bcftools view -r CM000663.2 all.vcf.gz -Oz -o yri_CM000663.2.vcf.gz
 
     \b
     Example usage:
-        flexsweep polarize --maf input.maf.gz --vcf input.maf.gz --outgroups specie1,specie2,specie3 --method kimura
+        flexsweep polarize --maf primates_CM000663.2.maf.gz --vcf yri_CM000663.2.vcf.gz --outgroups specie1,specie2,specie3 --method kimura
 
     """
 
     import flexsweep as fs
     import logging
 
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-
-    # fs.polarize.init_logging()
-
-    dir_name = os.path.dirname(maf)
-    base_name = os.path.basename(maf).replace(".maf.gz", "").replace(".maf", "")
-    
-    maf_input = maf
-
-    if split:
-        if not contig:
-            click.secho("Error: --contig is required when --split is enabled.", fg="red")
-            raise click.Abort()
-            
-        maf_split = os.path.join(dir_name, f"{base_name}_{contig}.maf.gz")
-        click.echo(f"Splitting MAF for contig: {contig}")
-        fs.polarize.maf_split(maf, maf_split, contig)
-        maf_input = maf_split
-
-    if sort:
-        suffix = f"_{contig}_sorted" if split else "_sorted"
-        maf_sort = os.path.join(dir_name, f"{base_name}{suffix}.maf.gz")
-        
-        click.echo("Sorting MAF file...")
-        try:
-            fs.polarize.maf_sort(maf_input, maf_sort)
-            maf_input = maf_sort 
-        except Exception as e:
-            click.secho(f"Error during sorting: {e}", fg="red")
-            raise click.Abort()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     try:
-        fs.polarize.polarize(
-            maf_input, 
-            vcf, 
-            outgroups, 
-            method, 
-            int(nrandom)
-        )
+        fs.polarize.polarize(maf, vcf, outgroups, method, int(nrandom))
     except Exception as e:
         click.secho(f"Error during polarization: {e}", fg="red")
         raise click.Abort()
+
+
+@cli.command(name="split-maf")
+@click.option(
+    "--maf",
+    type=str,
+    required=True,
+    help="Input MAF file to split. Can be gzipped.",
+)
+@click.option(
+    "--contig",
+    type=str,
+    required=True,
+    help="Reference contig to extract, e.g: CM000663.2. Must match the VCF's contig name.",
+)
+@click.option(
+    "--outdir",
+    type=str,
+    required=False,
+    default=None,
+    help="Output directory. Defaults to the input MAF's directory.",
+)
+@click.option(
+    "--sort/--no-sort",
+    default=True,
+    help="Sort the extracted contig by position. On by default: polarize requires it.",
+)
+@click.option(
+    "--tmp-dir",
+    type=str,
+    required=False,
+    default=None,
+    help="Directory for the intermediate split and the sort's spill chunks.",
+)
+@click.option(
+    "--chunk-bytes",
+    type=int,
+    required=False,
+    default=268435456,
+    help="Maximum bytes held in memory before the sort spills to disk.",
+)
+def split_maf(maf, contig, outdir, sort, tmp_dir, chunk_bytes):
+    """
+    Split a MAF by reference contig and sort it by position, ready for polarize.
+
+    \b
+    Polarization is a streaming merge-join over the MAF and VCF: its cursor only moves
+    forward and never rewinds, so an unsorted or multi-contig MAF makes it silently skip
+    variants. This command produces the single-contig, position-sorted MAF it needs.
+
+    \b
+    The VCF side is a standard bcftools job, so flexsweep does not duplicate it:
+        bcftools view -r CM000663.2 all.vcf.gz -Oz -o yri_CM000663.2.vcf.gz
+        tabix -p vcf yri_CM000663.2.vcf.gz
+
+    \b
+    Example usage:
+        flexsweep split-maf --maf primates.maf.gz --contig CM000663.2
+    """
+
+    import flexsweep as fs
+    import logging
+    import tempfile
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    if not os.path.isfile(maf):
+        click.secho(f"Error: MAF file not found: {maf}", fg="red")
+        raise click.Abort()
+
+    base_name = os.path.basename(maf).replace(".maf.gz", "").replace(".maf", "")
+    out_dir = outdir if outdir is not None else os.path.dirname(maf)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    # Named for the contig alone, whether or not sorting ran, so --no-sort output stays
+    # drop-in interchangeable and the name never leaks which internal steps happened.
+    maf_out = os.path.join(out_dir, f"{base_name}_{contig}.maf.gz")
+
+    scratch = tmp_dir if tmp_dir is not None else tempfile.gettempdir()
+    os.makedirs(scratch, exist_ok=True)
+
+    try:
+        if sort:
+            # The unsorted extract is a full contig of MAF and can run to many GB, so it
+            # goes to scratch and is dropped once the sort has consumed it.
+            fd, split_tmp = tempfile.mkstemp(
+                prefix=f"{base_name}_{contig}_", suffix=".maf.gz", dir=scratch
+            )
+            os.close(fd)
+            try:
+                click.echo(f"Splitting MAF for contig: {contig}")
+                fs.polarize.maf_split(maf, split_tmp, contig)
+
+                click.echo("Sorting by position...")
+                fs.polarize.maf_sort(
+                    split_tmp, maf_out, None, int(chunk_bytes), scratch
+                )
+            finally:
+                if os.path.exists(split_tmp):
+                    os.unlink(split_tmp)
+        else:
+            click.echo(f"Splitting MAF for contig: {contig}")
+            fs.polarize.maf_split(maf, maf_out, contig)
+    except Exception as e:
+        click.secho(f"Error during split-maf: {e}", fg="red")
+        raise click.Abort()
+
+    click.secho(f"Wrote {maf_out}", fg="green")
 
 
 @cli.command()
@@ -1669,7 +1774,11 @@ def scan(
         window_mode=window_mode,
         config={
             "lassi": {"K_truncation": K_truncation, "sweep_mode": sweep_mode},
-            "lassip": {"K_truncation": K_truncation, "sweep_mode": sweep_mode, "max_extend": max_extend},
+            "lassip": {
+                "K_truncation": K_truncation,
+                "sweep_mode": sweep_mode,
+                "max_extend": max_extend,
+            },
             "raisd": {"window_size": raisd_window},
             "dind": {"window_size": window_size},
             "high_freq": {"window_size": window_size},

@@ -645,12 +645,12 @@ class CNN:
             if n is not None:
                 tmp = tmp.sample(n)
 
-        tmp = tmp.with_columns(
-            pl.when(pl.col("model") != "neutral")
-            .then(pl.lit("sweep"))
-            .otherwise(pl.lit("neutral"))
-            .alias("model")
-        )
+        # tmp = tmp.with_columns(
+        #     pl.when(pl.col("model") != "neutral")
+        #     .then(pl.lit("sweep"))
+        #     .otherwise(pl.lit("neutral"))
+        #     .alias("model")
+        # )
 
         if w is not None:
             try:
@@ -703,10 +703,10 @@ class CNN:
         ) = train_test_split(train_stats, y, test_size=test_split, shuffle=True)
 
         X_train = (
-            train_stats.select(train_stats.columns[8:])
+            X_train.select(X_train.columns[8:])
             .to_numpy()
             .reshape(
-                train_stats.shape[0],
+                X_train.shape[0],
                 self.num_stats,
                 self.windows.size * self.center.size,
                 1,
@@ -878,19 +878,6 @@ class CNN:
 
         self.num_stats = len(_stats)
         self.feature_names = list(_stats)
-
-        # Default CNN
-        if cnn is None:
-            cnn = self.cnn_flexsweep
-
-        (
-            X_train,
-            X_test,
-            Y_train,
-            Y_test,
-            X_valid,
-            Y_valid,
-        ) = self.load_training_data(w=w, _stats=_stats, one_dim=one_dim)
 
         X_train = X_train.reshape(
             X_train.shape[0], self.num_stats, self.center.size * self.windows.size, 1
@@ -1197,7 +1184,7 @@ class CNN:
         return df, fig
 
     def predict(
-        self, _stats=None, w=None, one_dim=False, _iter=1, fname=None, preprocess=True
+        self, _stats=None, w=None, one_dim=False, _iter=1, fname=None, preprocess=False
     ):
         """
         Predict on a feature table using a trained model.
@@ -1496,9 +1483,11 @@ class CNN:
         ax.set_xlabel("False Positive Rate")
         ax.set_ylabel("Sensitivity")
         ax.set_title("ROC Curve")
-        ax.axis("equal")
+        ax.set_xlim(-0.05, 1.05)
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_aspect("equal", adjustable="box")
         ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-        ax.legend()
+        ax.legend(loc="lower right")
         fig.tight_layout()
         plot_roc = fig
 

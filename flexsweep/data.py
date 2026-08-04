@@ -17,31 +17,26 @@ filterwarnings("ignore", message="invalid INFO header", module="allel.io.vcf_rea
 
 
 def _chrom_id(s):
-    """
-    Canonical chromosome extractor.
-
-    Normalizes:
-      chr01, chr1, contig_1, SUPER__01 -> "1"
-      chrX -> "x"
-      chrMT / chrM -> "mt"
-    """
     s = s.lower()
 
-    # unify mitochondrial naming
+    # 1. Unify mitochondrial naming
     s = re.sub(r"chr?m(t)?", "mt", s)
 
-    # extract first meaningful token
-    # Use lookahead instead of \b: in Python regex '_' is \w so \b fails for
-    # tokens like "chr1_polarized" where '1' is followed by '_'.
-    # (?=[^a-z0-9]|$) requires the token to be followed by a separator or EOS,
-    # which also prevents 'y' in 'yri' from matching the Y chromosome.
-    m = re.search(r"(?:chr|contig|super)?[^a-z0-9]*([0-9]+|x|y|mt)(?=[^a-z0-9]|$)", s)
+    # 2. Extract token
+    # We use (?:^|[^a-z0-9]) at the start to ensure we aren't mid-word.
+    # Note: We now use m.group(1) for the chromosome because group 0
+    # will include the leading separator.
+    pattern = (
+        r"(?:^|[^a-z0-9])(?:chr|contig|super)?[^a-z0-9]*([0-9]+|x|y|mt)(?=[^a-z0-9]|$)"
+    )
+
+    m = re.search(pattern, s)
     if not m:
         return None
 
+    # The capturing group ([0-9]+|x|y|mt) is now the first group
     chrom = m.group(1)
 
-    # normalize numeric chromosomes: "01" -> "1"
     if chrom.isdigit():
         chrom = str(int(chrom))
 

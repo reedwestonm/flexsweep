@@ -7,6 +7,9 @@ from collections import defaultdict
 import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.gridspec import GridSpec
+from matplotlib.ticker import NullFormatter
 from allel import (
     GenotypeArray,
     read_vcf,
@@ -392,6 +395,185 @@ def plot_sfs(
     return df
 
 
+# ----------------------------------------------------------------------------
+# Neutral-emphasis Manhattan: shared palette + helpers
+# ----------------------------------------------------------------------------
+NEUTRAL_SWEEP_CMAP = LinearSegmentedColormap.from_list(
+    "neutral_sweep",
+    [
+        (0.00, "#bcc7d2"),  # neutral: quiet cool blue-grey
+        (0.45, "#8ca0b0"),  # slate blue — neutral holds through mid-range
+        (0.65, "#e6a23c"),  # amber onset: signal starts here
+        (0.85, "#e2560f"),  # vivid orange-red
+        (1.00, "#9c0f18"),  # sweep: deep saturated crimson
+    ],
+)
+
+
+def _mh_chr_label(i: int) -> str:
+    return {23: "X", 24: "Y", 25: "MT"}.get(int(i), str(int(i)))
+
+
+def _mh_to_y(P, eps, log_transform):
+    """P → -log10(1 - P) (or raw P when log_transform is False)."""
+    P = np.asarray(P, dtype=float)
+    return -np.log10(np.clip(1.0 - P, eps, None)) if log_transform else P
+
+
+def _mh_break_marks(ax_top, ax_bot):
+    """Diagonal break marks on the shared edge of two stacked panels."""
+    d = 0.6
+    kw = dict(
+        marker=[(-1, -d), (1, d)],
+        markersize=7,
+        linestyle="none",
+        color="k",
+        mec="k",
+        mew=1,
+        clip_on=False,
+    )
+    ax_top.plot([0, 1], [0, 0], transform=ax_top.transAxes, **kw)
+    ax_bot.plot([0, 1], [1, 1], transform=ax_bot.transAxes, **kw)
+
+
+def _mh_draw_marginal(
+    axm, y, P, color_by_p, annotate, neutral_threshold, log_transform
+):
+    """Horizontal log-count histogram of y on a y-shared companion axis."""
+    y_lo, y_hi = axm.get_ylim()
+    edges = np.linspace(y_lo, y_hi, 60)
+    counts = np.histogram(y, bins=edges)[0]
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    if color_by_p:
+        p_centers = (1.0 - np.power(10.0, -centers)) if log_transform else centers
+        bar_colors = NEUTRAL_SWEEP_CMAP(np.clip(p_centers, 0.0, 1.0))
+    else:
+        bar_colors = "#666666"
+    axm.barh(
+        centers,
+        np.maximum(counts, 0),
+        height=np.diff(edges),
+        align="center",
+        color=bar_colors,
+        edgecolor="none",
+        log=True,
+        zorder=5,
+    )
+    if annotate:
+        frac = float(np.mean(P < neutral_threshold)) * 100.0
+        axm.text(
+            0.95,
+            0.97,
+            f"{frac:.1f}% neutral\n" rf"($P_\mathrm{{sweep}} < {neutral_threshold:g}$)",
+            transform=axm.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+            color="#333333",
+        )
+    axm.tick_params(axis="y", labelleft=False)
+    axm.tick_params(axis="x", labelsize=7)
+    axm.xaxis.set_minor_formatter(NullFormatter())
+    axm.spines[["top", "right"]].set_visible(False)
+    axm.grid(axis="x", color="lightgray", lw=0.4)
+
+
+def _mh_facets(
+    df, *, log_transform, eps, ncols, neutral_threshold, threshold_lines, figsize,
+    title, out, dpi
+):
+    """Per-chromosome faceted mini-Manhattans (reuses the already-loaded df)."""
+    chroms = sorted(df["CHR_INT"].unique().to_list())
+    n = len(chroms)
+    nrows = math.ceil(n / ncols)
+    fs = figsize if (figsize and figsize != (14, 5)) else (ncols * 3.2, nrows * 2.0)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=fs, sharey=True, constrained_layout=True
+    )
+    axes = np.atleast_1d(axes).ravel()
+
+    yall = _mh_to_y(df["P"].to_numpy(), eps, log_transform)
+    if threshold_lines is not None:
+        lines = threshold_lines
+    elif log_transform:
+        lines = [(0.999, "-", ""), (0.99, "--", "")]
+    else:
+        lines = []
+    thr_ys = [float(_mh_to_y(p, eps, log_transform)) for p, _, _ in lines]
+    ymax = (
+        max(float(yall.max()), min(thr_ys) if thr_ys else 0.0) * 1.08
+        if log_transform
+        else 1.05
+    )
+
+    mappable = None
+    for ax, c in zip(axes, chroms):
+        sub = df.filter(pl.col("CHR_INT") == c)
+        P = sub["P"].to_numpy()
+        xm = sub["midpoint"].to_numpy() / 1e6
+        yv = _mh_to_y(P, eps, log_transform)
+        hi = P >= neutral_threshold
+        o = np.argsort(P)
+        coll = ax.scatter(
+            xm[o],
+            yv[o],
+            c=P[o],
+            cmap=NEUTRAL_SWEEP_CMAP,
+            norm=Normalize(0, 1),
+            s=6,
+            alpha=0.4,
+            linewidths=0,
+            rasterized=True,
+        )
+        mappable = mappable or coll
+        if hi.any():
+            xh, yh, ph = xm[hi], yv[hi], P[hi]
+            so = np.argsort(ph)
+            frac = (ph[so] - neutral_threshold) / max(1e-9, 1.0 - neutral_threshold)
+            ax.scatter(
+                xh[so],
+                yh[so],
+                c=ph[so],
+                cmap=NEUTRAL_SWEEP_CMAP,
+                norm=Normalize(0, 1),
+                s=4 * (3.0 + 7.0 * frac),
+                edgecolors="black",
+                linewidths=0.1,
+                zorder=15,
+            )
+        for (p_val, ls, _lbl), yt in zip(lines, thr_ys):
+            if (not log_transform) or yt <= ymax:
+                ax.axhline(yt, color="black", ls=ls, lw=0.8, zorder=20)
+        ax.set_title(f"chr {_mh_chr_label(c)}", fontsize=10)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", color="lightgray", lw=0.4)
+        ax.tick_params(labelsize=7)
+        ax.margins(x=0.02)
+
+    axes[0].set_ylim(0, ymax)
+    for ax in axes[n:]:
+        ax.set_visible(False)
+    fig.supxlabel("Position (Mb)", fontsize=10)
+    fig.supylabel(
+        r"$-\log_{10}(1 - P_\mathrm{sweep})$"
+        if log_transform
+        else "Probability of Sweep",
+        fontsize=10,
+    )
+    if mappable is not None:
+        fig.colorbar(mappable, ax=axes.tolist(), pad=0.01, fraction=0.015).set_label(
+            r"$P_\mathrm{sweep}$", fontsize=9
+        )
+    if title:
+        fig.suptitle(title, x=0.01, ha="left", fontsize=12)
+    if out:
+        fig.savefig(out, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
+    return fig
+
+
 def plot_manhattan(
     prediction,
     recombination_map: str | None = None,
@@ -408,6 +590,16 @@ def plot_manhattan(
     center: int | None = None,
     window_bp: int = 5_000_000,
     chr_prefix_pattern: str = r"^chr",
+    color_by_p: bool = True,
+    marginal: bool = True,
+    broken: bool = False,
+    chrom_gap: float = 0.006,
+    band_alpha: float = 0.09,
+    neutral_threshold: float = 0.9,
+    marginal_width: float = 0.16,
+    facet: bool = False,
+    ncols: int = 4,
+    dpi: int = 300,
 ):
     # ----------------------------
     # Stable chromosome encoding
@@ -425,7 +617,7 @@ def plot_manhattan(
         )
 
     def _chr_str_to_int(val: str | int) -> int:
-        s = str(val).upper()
+        s = str(val)
         s = pl.Series([s]).str.replace(chr_prefix_pattern, "").to_list()[0]
 
         if s == "X":
@@ -473,6 +665,23 @@ def plot_manhattan(
     df = df.with_columns(
         pl.col(p_target).cast(pl.Float64).clip(lower_bound=eps).alias("P")
     )
+
+    # ----------------------------
+    # Facet dispatch (per-chromosome grid; reuses the loaded df)
+    # ----------------------------
+    if facet:
+        return _mh_facets(
+            df,
+            log_transform=log_transform,
+            eps=eps,
+            ncols=ncols,
+            neutral_threshold=neutral_threshold,
+            threshold_lines=threshold_lines,
+            figsize=figsize,
+            title=title,
+            out=out,
+            dpi=dpi,
+        )
 
     # ----------------------------
     # Recombination map
@@ -538,30 +747,37 @@ def plot_manhattan(
 
         if center is not None:
             xlim_lo, xlim_hi = center - window_bp, center + window_bp
+
+            if xlim_lo < 0:
+                xlim_lo = 0
+
+            if xlim_hi > df_plot[-1]["end"].item():
+                xlim_hi = df_plot[-1]["end"].item()
+
             plot_center_line = float(center)
 
             df_plot = df_plot.filter(
-                (pl.col("midpoint") >= xlim_lo - 1_000_000)
-                & (pl.col("midpoint") <= xlim_hi + 1_000_000)
+                (pl.col("midpoint") >= xlim_lo) & (pl.col("midpoint") <= xlim_hi)
             )
         else:
             xlim_lo, xlim_hi, plot_center_line = None, None, None
 
         df_plot = df_plot.sort("BP_START")
-
-    # ----------------------------
-    # Global mode
-    # ----------------------------
     else:
         df = df.filter(pl.col("CHR_INT").is_in(chrom_order))
 
+        # cumulative coordinate with an inter-chromosome whitespace gap so each
+        # chromosome sits in its own bounded block (gap = chrom_gap × genome len)
         chr_lens = (
             df.group_by("CHR_INT")
             .agg(pl.col("BP_START").max().alias("chr_len"))
             .sort("CHR_INT")
-            .with_columns(
-                (pl.col("chr_len").cum_sum() - pl.col("chr_len")).alias("tot")
-            )
+        )
+        gap = chrom_gap * float(chr_lens["chr_len"].sum())
+        chr_lens = chr_lens.with_row_index("ci").with_columns(
+            (
+                pl.col("chr_len").cum_sum() - pl.col("chr_len") + pl.col("ci") * gap
+            ).alias("tot")
         )
 
         df_plot = (
@@ -572,153 +788,270 @@ def plot_manhattan(
 
         axisdf = (
             df_plot.group_by("CHR_INT")
-            .agg(((pl.col("BPcum").max() + pl.col("BPcum").min()) / 2).alias("center"))
+            .agg(
+                ((pl.col("BPcum").max() + pl.col("BPcum").min()) / 2).alias("center"),
+                pl.col("BPcum").min().alias("lo"),
+                pl.col("BPcum").max().alias("hi"),
+            )
             .sort("CHR_INT")
         )
 
-    # ----------------------------
-    # Plot
-    # ----------------------------
-    fig, ax = plt.subplots(figsize=figsize)
+    # ========================================================================
+    # Regional rendering (single-axis, unchanged look)
+    # ========================================================================
+    if is_regional:
+        fig, ax = plt.subplots(figsize=figsize)
 
-    # ----------------------------
-    # Recombination (ON TOP, darker)
-    # ----------------------------
-    if "cm_mb" in df_plot.columns:
-        ax2 = ax.twinx()
-        ax2.set_zorder(ax.get_zorder() + 1)
-        ax2.patch.set_alpha(0)
+        if "cm_mb" in df_plot.columns:
+            ax2 = ax.twinx()
+            ax2.set_zorder(ax.get_zorder() + 1)
+            ax2.patch.set_alpha(0)
+            ax2.plot(
+                df_plot["midpoint"].to_numpy(),
+                df_plot["cm_mb"].fill_null(0).to_numpy(),
+                color="#e60000",
+                lw=1.6,
+                alpha=0.6,
+                zorder=50,
+            )
+            ax2.set_ylabel("Recombination Rate (cM/Mb)", fontsize=9)
+            if center is not None:
+                ax2.set_xlim(xlim_lo, xlim_hi)
 
-        x_rec = (
-            df_plot["midpoint"].to_numpy()
-            if is_regional
-            else df_plot["BPcum"].to_numpy()
-        )
-        y_rec = df_plot["cm_mb"].fill_null(0).to_numpy()
+        y = _mh_to_y(df_plot["P"].to_numpy(), eps, log_transform)
+        x = df_plot["midpoint"].to_numpy()
+        ax.scatter(x, y, color="black", s=8, lw=0, zorder=10)
 
-        recomb_color = "#e60000"
+        if center is not None:
+            ax.axvline(
+                plot_center_line, color="black", lw=1.2, ls="--", alpha=0.6, zorder=100
+            )
 
-        if is_regional:
-            ax2.plot(x_rec, y_rec, color=recomb_color, lw=1.6, alpha=0.6, zorder=50)
+        if threshold_lines:
+            for y_v, ls, lbl in threshold_lines:
+                ax.axhline(
+                    y_v, color="black", linestyle=ls, lw=1.0, label=lbl, zorder=20
+                )
+        elif log_transform:
+            ax.axhline(
+                3,
+                color="black",
+                ls="-",
+                lw=1.2,
+                label=r"$p_{sweep} > 0.999$",
+                zorder=20,
+            )
+            ax.axhline(
+                2,
+                color="black",
+                ls="--",
+                lw=1.2,
+                label=r"$p_{sweep} > 0.99$",
+                zorder=20,
+            )
+
+        if log_transform:
+            ax.set_ylabel(r"$-\log_{10}(1 - P)$")
+            ax.set_ylim(0, np.ceil(y.max()) + 1)
         else:
-            ax2.scatter(x_rec, y_rec, color=recomb_color, s=2, alpha=0.45, zorder=50)
+            ax.set_ylabel("Probability of Sweep")
+            ax.set_ylim(0, 1.1)
 
+        if center is not None:
+            ticks = [xlim_lo, center, xlim_hi]
+            ax.set_xlim(xlim_lo, xlim_hi)
+            ax.set_xticks(ticks)
+            ax.set_xticklabels([f"{t / 1e6:.2f} Mb" for t in ticks])
+        else:
+            ax.xaxis.set_major_formatter(
+                mticker.FuncFormatter(lambda v, _: f"{v / 1e6:.2f} Mb")
+            )
+
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", color="lightgray", lw=0.5)
+        if log_transform or threshold_lines:
+            ax.legend(fontsize=9)
+        if title:
+            ax.set_title(title)
+        ax.relim()
+        ax.autoscale_view(scalex=False, scaley=True)
+        plt.tight_layout()
+
+        if out:
+            fig.savefig(out, dpi=dpi)
+            plt.close(fig)
+        else:
+            plt.show()
+        return fig
+
+    # ========================================================================
+    # Genome-wide rendering (neutral-emphasis: gaps, bands, split axis,
+    # color-by-P, marginal, optional broken axis)
+    # ========================================================================
+    P = df_plot["P"].to_numpy()
+    x = df_plot["BPcum"].to_numpy()
+    chr_int = df_plot["CHR_INT"].to_numpy()
+    y = _mh_to_y(P, eps, log_transform)
+
+    y_lo = 0.0
+    y_hi = float(np.ceil(y.max()) + 1) if log_transform else 1.1
+    y_break = float(_mh_to_y(neutral_threshold, eps, log_transform))
+    bands = [(y_break, y_hi), (y_lo, y_break)] if broken else [(y_lo, y_hi)]
+
+    if threshold_lines is not None:
+        lines = threshold_lines
+    elif log_transform:
+        lines = [
+            (0.999, "-", r"$P_\mathrm{sweep} > 0.999$"),
+            (0.99, "--", r"$P_\mathrm{sweep} > 0.99$"),
+        ]
+    else:
+        lines = []
+
+    nrows = len(bands)
+    fig = plt.figure(figsize=figsize, constrained_layout=True)
+    gs = GridSpec(
+        nrows,
+        2 if marginal else 1,
+        width_ratios=[1.0, marginal_width] if marginal else [1.0],
+        height_ratios=[1.0, 2.4] if broken else [1.0],
+        wspace=0.02,
+        hspace=0.06,
+        figure=fig,
+    )
+    main_axes, marg_axes = [], []
+    for r in range(nrows):
+        ax = fig.add_subplot(gs[r, 0], sharex=main_axes[0] if main_axes else None)
+        main_axes.append(ax)
+        marg_axes.append(fig.add_subplot(gs[r, 1], sharey=ax) if marginal else None)
+
+    # recombination overlay (single-axis genome-wide only)
+    if ("cm_mb" in df_plot.columns) and not broken:
+        ax0 = main_axes[0]
+        ax2 = ax0.twinx()
+        ax2.set_zorder(ax0.get_zorder() + 1)
+        ax2.patch.set_alpha(0)
+        ax2.scatter(
+            x,
+            df_plot["cm_mb"].fill_null(0).to_numpy(),
+            color="#e60000",
+            s=2,
+            alpha=0.45,
+            zorder=50,
+        )
         ax2.set_ylabel("Recombination Rate (cM/Mb)", fontsize=9)
 
-        if is_regional and center is not None:
-            ax2.set_xlim(xlim_lo, xlim_hi)
-
-    # ----------------------------
-    # Manhattan scatter
-    # ----------------------------
-    if is_regional:
-        y = (
-            -np.log10((1 - df_plot["P"]).clip(lower_bound=eps).to_numpy())
-            if log_transform
-            else df_plot["P"].to_numpy()
-        )
-        x = df_plot["midpoint"].to_numpy()
-
-        colors = [_CHR_COLORS[c] for c in df_plot["CHR_INT"].to_list()]
-
-        ax.scatter(x, y, color=colors, s=8, lw=0, zorder=10)
-
-    else:
-        for c_val in chrom_order:
-            sub = df_plot.filter(pl.col("CHR_INT") == c_val)
-            if sub.is_empty():
-                continue
-
-            y = (
-                -np.log10((1 - sub["P"]).clip(lower_bound=eps).to_numpy())
-                if log_transform
-                else sub["P"].to_numpy()
+    mappable = None
+    for r, (ax, (blo, bhi)) in enumerate(zip(main_axes, bands)):
+        for i, row in enumerate(axisdf.iter_rows(named=True)):
+            if i % 2 == 1:
+                ax.axvspan(
+                    row["lo"],
+                    row["hi"],
+                    color="#2a3642",
+                    alpha=band_alpha,
+                    lw=0,
+                    zorder=0,
+                )
+        if color_by_p:
+            o = np.argsort(P)  # low-P first so sweep points sit on top
+            coll = ax.scatter(
+                x[o],
+                y[o],
+                c=P[o],
+                cmap=NEUTRAL_SWEEP_CMAP,
+                norm=Normalize(0, 1),
+                s=4,
+                alpha=0.35,
+                linewidths=0,
+                rasterized=True,
+                zorder=10,
             )
-            x = sub["BPcum"].to_numpy()
+            mappable = mappable or coll
+        else:
+            for row in axisdf.iter_rows(named=True):
+                m = chr_int == row["CHR_INT"]
+                ax.scatter(
+                    x[m],
+                    y[m],
+                    color=_CHR_COLORS[row["CHR_INT"]],
+                    s=8,
+                    lw=0,
+                    rasterized=True,
+                    zorder=10,
+                )
+        for p_val, ls, lbl in lines:
+            ax.axhline(
+                float(_mh_to_y(p_val, eps, log_transform)),
+                color="black",
+                ls=ls,
+                lw=1.0,
+                label=lbl if r == 0 else None,
+                zorder=20,
+            )
+        ax.set_ylim(blo, bhi)
+        ax.set_xlim(x.min() - gap / 2.0, x.max() + gap / 2.0)
+        ax.grid(axis="y", color="lightgray", lw=0.5)
+        ax.spines[["top", "right"]].set_visible(False)
 
-            ax.scatter(x, y, color=_CHR_COLORS[c_val], s=8, lw=0, zorder=10)
-
-    # ----------------------------
-    # Center line
-    # ----------------------------
-    if is_regional and center is not None:
-        ax.axvline(
-            plot_center_line, color="black", lw=1.2, ls="--", alpha=0.6, zorder=100
-        )
-
-    # ----------------------------
-    # Thresholds (RESTORED)
-    # ----------------------------
-    if threshold_lines:
-        for y_v, ls, lbl in threshold_lines:
-            ax.axhline(y_v, color="black", linestyle=ls, lw=1.0, label=lbl, zorder=20)
-    elif log_transform:
-        ax.axhline(
-            3, color="black", ls="-", lw=1.2, label=r"$p_{sweep} > 0.999$", zorder=20
-        )
-        ax.axhline(
-            2, color="black", ls="--", lw=1.2, label=r"$p_{sweep} > 0.99$", zorder=20
-        )
-
-    # ----------------------------
-    # Formatting
-    # ----------------------------
-    if log_transform:
-        ax.set_ylabel(r"$-\log_{10}(1 - P)$")
-        ax.set_ylim(0, 8)
+    ylabel = (
+        r"$-\log_{10}(1 - P_\mathrm{sweep})$"
+        if log_transform
+        else "Probability of Sweep"
+    )
+    if broken:
+        top_ax, bot_ax = main_axes
+        top_ax.spines["bottom"].set_visible(False)
+        top_ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+        _mh_break_marks(top_ax, bot_ax)
+        x_axis_ax, legend_ax = bot_ax, top_ax
+        fig.supylabel(ylabel, fontsize=11)
     else:
-        ax.set_ylabel("Probability of Sweep")
-        ax.set_ylim(0, 1.1)
+        x_axis_ax = legend_ax = main_axes[0]
+        main_axes[0].set_ylabel(ylabel)
 
-    if is_regional:
-        ax.xaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda x, _: f"{x / 1e6:.2f} Mb")
+    # x-axis: chromosome labels + split axis line (one segment per chromosome)
+    x_axis_ax.set_xticks(axisdf["center"].to_list())
+    x_axis_ax.set_xticklabels([str(c) for c in axisdf["CHR_INT"].to_list()], fontsize=7)
+    x_axis_ax.set_xlabel("Chromosome")
+    x_axis_ax.spines["bottom"].set_visible(False)
+    x_axis_ax.tick_params(axis="x", length=0)
+    btrans = x_axis_ax.get_xaxis_transform()
+    for row in axisdf.iter_rows(named=True):
+        x_axis_ax.plot(
+            [row["lo"], row["hi"]],
+            [0, 0],
+            transform=btrans,
+            color="black",
+            lw=0.9,
+            solid_capstyle="butt",
+            clip_on=False,
+            zorder=30,
         )
-        ax.set_xlabel(f"Chromosome {chrom}")
-    else:
-        ax.set_xticks(axisdf["center"].to_list())
-        ax.set_xticklabels([str(c) for c in axisdf["CHR_INT"].to_list()], fontsize=7)
 
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(axis="y", color="lightgray", lw=0.5)
-
-    if log_transform or threshold_lines:
-        ax.legend(fontsize=9)
-
+    if lines:
+        legend_ax.legend(fontsize=9, frameon=False, loc="upper right")
     if title:
-        ax.set_title(title)
+        main_axes[0].set_title(title, loc="left")
 
-    ax.set_xlim(center - 1_000_000, center + 1_000_000)
+    if marginal:
+        for r, (axm, ax) in enumerate(zip(marg_axes, main_axes)):
+            _mh_draw_marginal(
+                axm, y, P, color_by_p, r == nrows - 1, neutral_threshold, log_transform
+            )
+        marg_axes[-1].set_xlabel("windows", fontsize=8)
 
-    # If you want the Y-axis to auto-adjust to the data
-    # visible in this new X-range:
-    ax.relim()
-    ax.autoscale_view(scalex=False, scaley=True)
-    plt.tight_layout()
+    if mappable is not None:
+        anchor = [a for a in marg_axes if a is not None] if marginal else main_axes
+        fig.colorbar(mappable, ax=anchor, pad=0.02, fraction=0.05).set_label(
+            r"$P_\mathrm{sweep}$", fontsize=9
+        )
 
     if out:
-        fig.savefig(out, dpi=150, bbox_inches="tight")
+        fig.savefig(out, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
-
-    # # 1. Access the main axis
-    # ax = a.axes[0]
-
-    # # 2. Set the zoom and the narrow figure size
-    # ax.set_xlim(80_900_000, 82_800_000)
-    # a.set_size_inches(6, 5)
-
-    # # 3. FIX OVERLAPPING TICKS
-    # # Option A: Tell Matplotlib to only show a few ticks (e.g., max 4)
-    # ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=4))
-
-    # # Option B: Rotate the labels slightly so they don't hit each other
-    # plt.setp(ax.get_xticklabels(), rotation=30, ha='right')
-
-    # # 4. Cleanup and Save
-    # a.tight_layout()
-    # a.savefig("plot_zoom_fixed_ticks.png", dpi=150, bbox_inches="tight")
     return fig
 
 
@@ -1398,6 +1731,105 @@ def plot_scan_zoom(
         window_bp=window_bp,
         **kwargs,
     )
+
+
+def plot_enrichment(
+    df: pl.DataFrame,
+    title: str,
+    ci: bool = False,
+    population: list = None,
+    facet: bool = False,
+    log_scale: bool = False,
+    reverse_x: bool = True,
+):
+    """
+    Enrichment plot.
+
+    Parameters
+    ----------
+    log_scale : log10 y-axis (default, good for the exploratory view since the
+        fold-enrichment CI explodes at stringent thresholds). Set False for the
+        linear 0–N publication view (e.g. virus-enrichment PDFs).
+    reverse_x : plot thresholds large→small left-to-right (stringent on the
+        right), matching the published virus-enrichment figures.
+    """
+
+    # Filter Populations
+    target_groups = ["AFR", "AMR", "EAS", "EUR", "SAS", "All"]
+    plot_df = df.filter(
+        pl.col("scope").is_in(population if population else target_groups)
+    )
+
+    # Setup Figure
+    # Standard NPG-style colors (Nature Publishing Group)
+    colors = ["#E64B35", "#4DBBD5", "#00A087", "#3C5488", "#F39B7F", "#8491B3"]
+    unique_pops = plot_df["scope"].unique().to_list()
+    color_map = {pop: colors[i % len(colors)] for i, pop in enumerate(unique_pops)}
+
+    if facet:
+        fig, axes = plt.subplots(
+            len(unique_pops), 1, figsize=(8, 4 * len(unique_pops)), sharex=True
+        )
+        if len(unique_pops) == 1:
+            axes = [axes]
+    else:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        axes = [ax] * len(unique_pops)
+
+    # Plotting Logic
+    for i, pop in enumerate(unique_pops):
+        current_ax = axes[i]
+        data = plot_df.filter(pl.col("scope") == pop).sort("threshold")
+
+        x = data["threshold"].to_numpy()
+        y = data["ratio"].to_numpy()
+
+        # Line and Points
+        (line,) = current_ax.plot(
+            x, y, marker="o", label=pop, color=color_map[pop], linewidth=2
+        )
+
+        # Confidence Interval Ribbon
+        if ci:
+            # Fold-enrichment CI: hold the observed VIP count fixed and divide by
+            # the control-count percentiles. NOTE the swap — dividing by the HIGH
+            # control percentile (ctrl_ci_hi) yields the LOWER enrichment bound,
+            # and by the LOW percentile (ctrl_ci_lo) the UPPER bound. The +0.1
+            # smoothing matches the `ratio` definition (vip+0.1)/(ctrl_mean+0.1),
+            # so the ribbon brackets the plotted line.
+            obs = data["vip_count"].to_numpy()
+            ctrl_lo = data["ctrl_ci_lo"].to_numpy()
+            ctrl_hi = data["ctrl_ci_hi"].to_numpy()
+            fold_lo = (obs + 0.1) / (ctrl_hi + 0.1)
+            fold_hi = (obs + 0.1) / (ctrl_lo + 0.1)
+            current_ax.fill_between(
+                x, fold_lo, fold_hi, color=line.get_color(), alpha=0.15
+            )
+
+        if facet or i == 0:
+            current_ax.axhline(1, color="black", linestyle="--", linewidth=1, alpha=0.7)
+            if log_scale:
+                current_ax.set_yscale("log")
+
+    # Styling (Theme Minimal equivalent)
+    for ax in axes if facet else [ax]:
+        ax.grid(True, which="both", ls="-", alpha=0.2)
+        ax.spines[["top", "right"]].set_visible(False)
+        if reverse_x:
+            ax.invert_xaxis()
+        if facet:
+            ax.set_title(f"Population: {unique_pops[axes.index(ax)]}")
+
+    if not facet:
+        plt.legend(title="Population", frameon=False)
+        plt.title(
+            f"{title}\nRank Threshold vs. Enrichment Ratio", loc="left", fontsize=14
+        )
+        plt.xlabel("Rank Threshold")
+        plt.ylabel("Enrichment Ratio (Obs/Exp)")
+
+    plt.tight_layout()
+    return fig
 
 
 ################## Sorting methods
@@ -2215,6 +2647,7 @@ def interpolate_rates(
         df_pred_rate = df_pred_rate.select(df_pred.columns + ["cm_mb"])
 
     if corr:
+        df_pred_rate = df_pred_rate.filter(pl.col("chr") == "chr1")
         df_corr = df_pred_rate.group_by("chr").agg(
             pl.len().alias("n"),
             pl.corr("prob_sweep", "cm_mb").alias("corr"),
@@ -2235,31 +2668,43 @@ def interpolate_rates(
         fig, axes = plt.subplots(
             nrows, ncols, figsize=(4 * ncols, 3.0 * nrows), sharey=True
         )
+
         axes = np.array(axes).reshape(-1)
 
         for ax, c in zip(axes, chrs):
             t = df_trend.filter(pl.col("chr") == c)
             x = t.get_column("cm_mb").to_numpy()
             y = t.get_column("prob_sweep").to_numpy()
-            # y = t.get_column("cm_mb_prop").to_numpy()
+
             ax.plot(x, y, linewidth=1.2, color="#2166ac")
+
             r = t.get_column("corr")[0]
             r_str = f"r={r:.2f}" if r is not None else "r=NA"
-            ax.set_title(f"{c}  ({r_str})", fontsize=8, pad=3)
+
+            # --- Updated Title Font ---
+            ax.set_title(f"{c}  ({r_str})", fontsize=20, pad=10)
+
             ax.axhline(0.5, linewidth=0.8, linestyle="--", color="gray", alpha=0.7)
             ax.set_ylim(0, 1)
-            ax.set_xlabel("cM/Mb", fontsize=8, labelpad=2)
+
+            # --- Updated Axis Label Fonts ---
+            ax.set_xlabel("cM/Mb", fontsize=16, labelpad=5)
             ax.set_ylabel(
-                "P(sweep)" if ax.get_subplotspec().is_first_col() else "", fontsize=8
+                "P(sweep)" if ax.get_subplotspec().is_first_col() else "", fontsize=16
             )
-            ax.tick_params(labelsize=7)
-            ax.tick_params(axis="x", pad=2)
+
+            # --- Updated Tick Fonts ---
+            ax.tick_params(labelsize=14)
+            ax.tick_params(axis="x", pad=5)
+
             ax.spines[["top", "right"]].set_visible(False)
 
         for ax in axes[len(chrs) :]:
             ax.axis("off")
 
-        plt.tight_layout(h_pad=3.5, w_pad=1.5)  # ← h_pad is the main lever here
+        # Increased h_pad to accommodate larger title/label sizes
+        plt.tight_layout(h_pad=5.0, w_pad=2.0)
+
         if out is not None:
             plt.savefig(out, dpi=300, bbox_inches="tight")
         else:

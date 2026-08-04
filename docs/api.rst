@@ -70,16 +70,20 @@ Enrichment
 Ancestral polarization
 ----------------------
 
-Flexsweep includes a Rust CLI (``flexsweep-polarize``) for annotating the
-ancestral allele in a VCF from a multi-species alignment (MAF). The Python
-wrappers below invoke the compiled binary; the binary must be built first with
-``build_rust_polarization()`` or installed via conda-forge.
+Flexsweep annotates the ancestral allele in a VCF from a multi-species
+alignment (MAF) through a compiled Rust extension, ``flexsweep.polarize``. The
+extension is bundled with the published wheels and requires no separate
+installation step; a source build compiles it as part of ``uv build``, as
+described in :doc:`installation`. The functions below are its Python entry
+points, and are also exposed on the command line as ``flexsweep split-maf`` and
+``flexsweep polarize``.
 
 **Workflow**:
 
-1. Sort the MAF by reference contig and position (``run_sort_maf``).
+1. Split the MAF by reference contig and sort it by position (``maf_split``,
+   ``maf_sort``).
 2. Polarize the VCF using the sorted MAF and one or more outgroup species
-   (``run_polarize``). The binary streams both files together and writes a
+   (``polarize``). The extension streams both files together and writes a
    bgzipped VCF with REF/ALT swapped where the outgroup consensus supports the
    alternate allele as ancestral.
 
@@ -168,8 +172,6 @@ Composite sweep statistics
 .. autofunction:: flexsweep.fv.LASSI_spectrum_and_Kspectrum
 .. autofunction:: flexsweep.fv.T_m_statistic_fast
 .. autofunction:: flexsweep.fv.compute_t_m
-.. autofunction:: flexsweep.fv.Lambda_statistic_fast
-.. autofunction:: flexsweep.fv.run_lassip
 .. autofunction:: flexsweep.fv.mu_stat
 .. autofunction:: flexsweep.fv.run_raisd
 

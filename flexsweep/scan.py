@@ -56,8 +56,7 @@ import os
 import warnings
 from collections import namedtuple
 from math import ceil
-
-from allel import nsl
+from allel import nsl, windowed_statistic
 
 from . import Parallel, delayed, np, pl
 from .fv import (
@@ -93,6 +92,7 @@ from .fv import (
     theta_pi,
     theta_watterson,
     zeng_e,
+    bin_values,
 )
 
 # Stat definition
@@ -528,41 +528,262 @@ def _snp_cm_mb(positions: np.ndarray, rec_map: np.ndarray) -> np.ndarray:
     return seg_rates[idx]
 
 
+def _parse_breaks_from_rbins(df_r_bins):
+    # expects categorical interval strings like "(a, b]"
+    uniq = df_r_bins["r_bins"].unique().sort()
+    breaks = [float(re.search(r",\s*([0-9.]+)\]$", s).group(1)) for s in uniq]
+    return breaks
+
+
+def snps_to_r_bins(
+    snps_df,
+    df_r_bins_windows,
+    mode="nearest_center",
+):
+    """
+    Returns snps_df with added columns: cm_mb, r_bins (then you can drop cm_mb if you want).
+    mode:
+      - 'nearest_center': pick window whose center is closest to SNP position
+      - 'mean_overlap': mean cm_mb across all overlapping windows
+      - 'max_overlap': max cm_mb across all overlapping windows
+    """
+    breaks = _parse_breaks_from_rbins(df_r_bins_windows)
+
+    snps = snps_df.with_columns(
+        [
+            pl.col("chr").cast(pl.Categorical).alias("chr"),
+            pl.col("positions").cast(pl.Int64),
+        ]
+    )
+
+    windows = df_r_bins_windows.with_columns(
+        [
+            pl.col("chr").cast(pl.Categorical),
+            pl.col("start").cast(pl.Int64),
+            pl.col("end").cast(pl.Int64),
+            pl.col("cm_mb").cast(pl.Float32),
+        ]
+    ).sort(["chr", "start"])
+
+    snps_parts = snps.partition_by("chr", as_dict=True)
+    win_parts = windows.partition_by("chr", as_dict=True)
+
+    annotated_parts = []
+
+    for chrom, snps_chrom in snps_parts.items():
+        w = win_parts.get(chrom)
+        if w is None or w.height == 0:
+            continue
+
+        pos = (
+            snps_chrom.select(pl.col("positions").unique().sort())
+            .to_series()
+            .to_numpy()
+        )
+        pos = pos.astype(np.int64, copy=False)
+
+        w_start = w["start"].to_numpy().astype(np.int64, copy=False)
+        w_end = w["end"].to_numpy().astype(np.int64, copy=False)
+        w_cm = w["cm_mb"].to_numpy().astype(np.float32, copy=False)
+
+        if mode == "nearest_center":
+            w_center = (w_start + w_end) // 2
+            idx = np.searchsorted(w_center, pos, side="left")
+            idx = np.clip(idx, 1, len(w_center) - 1)
+            left = idx - 1
+            right = idx
+            choose_right = np.abs(w_center[right] - pos) < np.abs(w_center[left] - pos)
+            best = np.where(choose_right, right, left)
+            cm_assigned = w_cm[best]
+
+        elif mode in ("mean_overlap", "max_overlap"):
+            # windows with start <= p are [0:right)
+            right = np.searchsorted(w_start, pos, side="right")
+            # overlapping also needs end > p -> left boundary in w_end
+            left = np.searchsorted(w_end, pos, side="left")
+
+            cm_assigned = np.full(pos.shape[0], np.nan, dtype=np.float32)
+            for i in range(pos.shape[0]):
+                l_idx = left[i]
+                r_idx = right[i]
+                if l_idx >= r_idx:
+                    continue
+                vals = w_cm[l_idx:r_idx]
+                cm_assigned[i] = (
+                    float(vals.mean()) if mode == "mean_overlap" else float(vals.max())
+                )
+
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        tmp = pl.DataFrame(
+            {
+                "chr": np.repeat(
+                    chrom[0] if isinstance(chrom, tuple) else chrom, pos.size
+                ),
+                "positions": pos,
+                "cm_mb": cm_assigned,
+            },
+            schema_overrides={
+                "chr": pl.Categorical,
+                "positions": pl.Int64,
+                "cm_mb": pl.Float32,
+            },
+        ).with_columns(pl.col("cm_mb").cut(breaks=breaks).alias("r_bins"))
+
+        annotated_parts.append(tmp)
+
+    matches = pl.concat(annotated_parts, rechunk=False) if annotated_parts else None
+
+    if matches is None:
+        return snps_df
+
+    return snps.join(matches, on=["chr", "positions"], how="left")
+
+
+def normalize_stat_scan(df, df_r_bins=None):
+    # For VCF, associate each SNP to the nearest window center (default) to assign r_bins
+
+    df = df.with_columns((pl.lit("chr") + pl.col("chr").cast(str)).alias("chr"))
+
+    stat_cols = [
+        c
+        for c in df.columns
+        if c not in ("iter", "chr", "positions", "daf", "freq_bins", "r_bins", "cm_mb")
+    ]
+
+    if df_r_bins is not None:
+        df_r_bins_w = (
+            df_r_bins.with_columns(
+                [
+                    pl.col("iter").str.extract(r"^([^:]+)", 1).alias("chr"),
+                    pl.col("iter")
+                    .str.extract(r":(\d+)-", 1)
+                    .cast(pl.Int64)
+                    .alias("start"),
+                    pl.col("iter")
+                    .str.extract(r"-(\d+)$", 1)
+                    .cast(pl.Int64)
+                    .alias("end"),
+                ]
+            )
+            .select(["chr", "start", "end", "cm_mb", "r_bins", "iter"])
+            .sort(["chr", "start"])
+        )
+
+        if set(stat_cols).issubset(_SNP_FLAT.union(_SNP_REGIONAL)):
+            df = snps_to_r_bins(df, df_r_bins_w)
+        else:
+            df = df.join(
+                df_r_bins_w.select("chr", "start", "end", "r_bins"),
+                on=["chr", "start", "end"],
+            )
+
+    if set(stat_cols).issubset(_SNP_FLAT.union(_SNP_REGIONAL)):
+        df = bin_values(df).fill_nan(None)
+
+    group_keys = ["freq_bins"] + (
+        ["r_bins"] if (df_r_bins is not None and "r_bins" in df.columns) else []
+    )
+
+    expected = (
+        df.group_by(group_keys)
+        .agg(pl.col(stat_cols).mean())
+        .sort(group_keys)
+        .fill_nan(None)
+    )
+
+    stdev = (
+        df.group_by(group_keys)
+        .agg(pl.col(stat_cols).std())
+        .sort(group_keys)
+        .fill_nan(None)
+    )
+
+    normalized_df = (
+        df.join(
+            expected,
+            on=group_keys,
+            how="left",
+            coalesce=True,
+            suffix="_mean_genome",
+        )
+        .join(
+            stdev,
+            on=group_keys,
+            how="left",
+            coalesce=True,
+            suffix="_std_genome",
+        )
+        .fill_nan(None)
+    )
+    normalized_df = normalized_df.with_columns(
+        [
+            (
+                (pl.col(s) - pl.col(f"{s}_mean_genome")) / pl.col(f"{s}_std_genome")
+            ).alias(f"{s}_std")
+            for s in stat_cols
+        ]
+    ).select(pl.exclude("^.*_genome$", "freq_bins", "cm_mb", "r_bins"))
+
+    return normalized_df
+
+
 def _normalize_daf_bins(
     values: np.ndarray,
     daf: np.ndarray,
     recomb: np.ndarray | None = None,
-    n_daf_bins: int = 50,
+    freq_step: float = 0.02,  # Matches your Polars default
     n_r_bins: int | None = None,
 ) -> np.ndarray:
-    """Z-score values within genome-wide DAF bins (+ recomb bins if provided).
+    """Fixed-width Z-score normalization matching Polars/Pandas cut logic."""
 
-    When ``recomb`` is provided, creates a joint (DAF × recomb_rate) grid:
-    ``n_daf_bins`` equal-frequency DAF bins × ``n_r_bins`` equal-frequency
-    recombination rate bins (Johnson et al. approach: 10 r_bins default).
-    """
-    if recomb is not None:
-        daf_edges = np.nanpercentile(daf, np.linspace(0, 100, n_daf_bins + 1))
-        daf_edges[0] -= 1e-10
+    # 1. Generate Fixed-Width Edges for DAF (0.0 to 1.0)
+    # This matches: np.arange(0, 1 + freq, freq)
+    daf_edges = np.arange(0, 1 + freq_step, freq_step)
+
+    # 2. Binning logic (np.digitize)
+    # Polars cut(include_lowest=True) behavior:
+    # We use np.digitize. To match (0, 0.02], (0.02, 0.04]...
+    # we use 'right=True'.
+    daf_bin = np.digitize(daf, daf_edges, right=True)
+
+    # Adjust for include_lowest=True (values exactly 0 go into bin 1)
+    daf_bin[daf == daf_edges[0]] = 1
+    # Clip to ensure indices stay within 1-indexed range of bins
+    n_daf_bins = len(daf_edges) - 1
+    daf_bin = np.clip(daf_bin, 1, n_daf_bins)
+
+    if recomb is not None and n_r_bins is not None:
+        # If recomb is still using quantiles, keep this,
+        # but usually you'd want consistency.
         r_edges = np.nanpercentile(recomb, np.linspace(0, 100, n_r_bins + 1))
         r_edges[0] -= 1e-10
-        daf_bin = np.clip(np.digitize(daf, daf_edges) - 1, 0, n_daf_bins - 1)
         r_bin = np.clip(np.digitize(recomb, r_edges) - 1, 0, n_r_bins - 1)
-        bin_key = daf_bin * n_r_bins + r_bin
+        # Create unique key for the joint grid
+        bin_key = (daf_bin - 1) * n_r_bins + r_bin
     else:
-        edges = np.nanpercentile(daf, np.linspace(0, 100, n_daf_bins + 1))
-        edges[0] -= 1e-10
-        bin_key = np.clip(np.digitize(daf, edges) - 1, 0, n_daf_bins - 1)
+        bin_key = daf_bin
 
     normalized = np.full_like(values, np.nan, dtype=np.float64)
+
     for b in np.unique(bin_key):
         mask = bin_key == b
+        # Polars .std() returns null if count < 2.
+        # mask.sum() < 2 ensures we don't divide by zero or get 0 std
         if mask.sum() < 2:
             continue
+
         v = values[mask].astype(np.float64)
-        mu, std = np.nanmean(v), np.nanstd(v)
-        if std > 0:
+
+        # 3. Match Polars Math
+        mu = np.nanmean(v)
+        # ddof=1 is CRITICAL. Polars uses N-1, NumPy defaults to N.
+        std = np.nanstd(v, ddof=1)
+
+        if std > 0 and not np.isnan(std):
             normalized[mask] = (v - mu) / std
+
     return normalized
 
 
@@ -1356,12 +1577,13 @@ def scan(
     config=None,
     w_size=201,
     step=10,
-    w_size_bp=1_000_000,
+    w_size_bp=1_200_000,
     step_bp=10_000,
     min_maf=0.05,
     recombination_map=None,
     n_daf_bins=50,
-    n_r_bins=None,
+    r_bins=None,
+    min_rate=0.0,
     nthreads=1,
     window_mode="auto",
     **kwargs,
@@ -1470,30 +1692,124 @@ def scan(
         return p
 
     # ------------------------------------------------------------------
-    # Phase 1: Pre-load all chromosomes sequentially (genome_reader uses
-    # pysam which is not thread-safe, so this must stay sequential).
+    # Phase 1: Pre-load all chromosomes sequentially (genome_reader)
     # ------------------------------------------------------------------
-    chrom_data: dict = (
-        {}
-    )  # chrom → (hap_int, rec_map, ac, positions, genetic_pos, recomb_vals)
-    for vcf_file in vcf_files:
+
+    assert r_bins is None or (
+        min_rate is not None and isinstance(min_rate, float)
+    ), "If r_bins is not None, min_rate must be a float (minimum recombination rate simulated)."
+
+    if recombination_map is not None:
+        df_recombination_map = pl.read_csv(
+            recombination_map,
+            separator="\t",
+            comment_prefix="#",
+            schema=pl.Schema(
+                [
+                    ("chr", pl.String),
+                    ("start", pl.Int64),
+                    ("end", pl.Int64),
+                    ("cm_mb", pl.Float64),
+                    ("cm", pl.Float64),
+                ]
+            ),
+        )
+    else:
+        df_recombination_map = None
+
+    df_params_l = []
+    df_r_l = []
+    for vcf_file in vcf_files[:]:
+        fs_data = Data(vcf_file, nthreads=nthreads, window_size=w_size_bp, step=step_bp)
+        sim_dict = fs_data.read_vcf()
+
+        # build parameter DataFrame
+        n = len(sim_dict["region"])
+        tmp_params = pl.DataFrame(
+            {
+                "model": sim_dict["region"],
+                "s": np.zeros(n),
+                "t": np.zeros(n),
+                "saf": np.zeros(n),
+                "eaf": np.zeros(n),
+                "mu": np.zeros(n),
+                "r": np.zeros(n),
+            }
+        )
+
+        # compute center from region strings "chr: start-end"
+        center_coords = [
+            tuple(map(int, r.split(":")[-1].split("-"))) for r in sim_dict["region"]
+        ]
+        nchr = sim_dict["region"][0].split(":")[0]
+
+        if recombination_map is not None:
+            cm_mb = get_cm(
+                df_recombination_map.filter(pl.col("chr") == nchr),
+                np.asarray(center_coords),
+                cm_mb=True,
+            )
+            tmp_params = tmp_params.with_columns(pl.lit(cm_mb["cm_mb"]).alias("r"))
+
+        if r_bins is not None:
+            tmp_r = cm_mb.with_columns(
+                [
+                    pl.col("cm_mb").cut(breaks=r_bins).alias("r_bins"),
+                    pl.format("{}:{}-{}", pl.col("chr"), pl.col("start"), pl.col("end"))
+                    .alias("region")
+                    .alias("iter"),
+                ]
+            ).select("iter", "cm_mb", "r_bins")
+            mask = (tmp_r["cm_mb"] >= min_rate).to_numpy()
+            exclude_r = tmp_r.filter(~mask)["iter"].to_numpy()
+
+            # remove excluded regions from regions[k]
+            exclude_set = set(exclude_r)
+            sim_dict["region"] = np.array(
+                [r for r in sim_dict["region"] if r not in exclude_set]
+            )
+
+            # filter tmp_r
+            tmp_r = tmp_r.filter(mask)
+            tmp_params = tmp_params.filter(mask)
+
+            df_r_l.append(tmp_r)
+        else:
+            tmp_r = None
+
+        df_params_l.append(tmp_params)
+
+    df_params = pl.concat(df_params_l)
+
+    try:
+        df_r = pl.concat(df_r_l)
+    except:
+        df_r = None
+
+    def _open_vcf(vcf_file, recombination_map):
+        # Perform the heavy lifting inside this function
         hap_int, rec_map, ac, _, position_masked, genetic_pos = genome_reader(
             vcf_file, recombination_map=recombination_map
         )
+
         chrom = str(int(rec_map[0, 0]))
-        recomb_vals = (
-            _snp_cm_mb(position_masked, rec_map)
-            if recombination_map is not None
-            else None
-        )
-        chrom_data[chrom] = (
+
+        # Return the key and the data as a pair
+        return chrom, (
             hap_int,
             rec_map,
             ac,
             position_masked,
             genetic_pos,
-            recomb_vals,
         )
+
+    # read vcf in parallel
+    results = Parallel(n_jobs=nthreads, verbose=2)(
+        delayed(_open_vcf)(vcf_file, recombination_map) for vcf_file in vcf_files
+    )
+
+    # Convert the list of tuples back into the chrom_data dictionary
+    chrom_data = dict(results)
 
     # ------------------------------------------------------------------
     # Phase 2: Build one global flat task list across ALL chromosomes
@@ -1512,7 +1828,6 @@ def scan(
         ac,
         position_masked,
         genetic_pos,
-        _,
     ) in chrom_data.items():
         for stat_key in stats:
             params = _make_params(stat_key)
@@ -1628,8 +1943,8 @@ def scan(
                 + [c for c in result.columns if c not in ("chrom", "pos")]
             )
             pos_masked = chrom_data[chrom][3]
-            recomb_vals = chrom_data[chrom][5]
-            raw_per_stat[stat_key].append((df, pos_masked, recomb_vals))
+            # recomb_vals = chrom_data[chrom][5]
+            raw_per_stat[stat_key].append((df, pos_masked))
 
         elif kind == "isafe":
             df = result.with_columns(pl.lit(chrom).alias("chrom"))
@@ -1650,8 +1965,8 @@ def scan(
                 + [c for c in result.columns if c not in ("chrom", "pos")]
             )
             pos_masked = chrom_data[chrom][3]
-            recomb_vals = chrom_data[chrom][5]
-            raw_per_stat[stat_key].append((df, pos_masked, recomb_vals))
+            # recomb_vals = chrom_data[chrom][5]
+            raw_per_stat[stat_key].append((df, pos_masked))
 
     # Consolidate isafe: regions are non-overlapping, just concat per chromosome
     if "isafe" in stats:
@@ -1661,21 +1976,21 @@ def scan(
                 + [c for c in parts[0].columns if c not in ("chrom", "pos")]
             )
             pos_masked = chrom_data[chrom][3]
-            recomb_vals = chrom_data[chrom][5]
-            raw_per_stat["isafe"].append((df_iso, pos_masked, recomb_vals))
+            # recomb_vals = chrom_data[chrom][5]
+            raw_per_stat["isafe"].append((df_iso, pos_masked))
 
     # Consolidate window batches: concat all batches per (chrom, stat)
     for (chrom, stat_key), parts in win_batch_parts.items():
         df_win = pl.concat(parts)
         pos_masked = chrom_data[chrom][3]
-        recomb_vals = chrom_data[chrom][5]
-        raw_per_stat[stat_key].append((df_win, pos_masked, recomb_vals))
+        # recomb_vals = chrom_data[chrom][5]
+        raw_per_stat[stat_key].append((df_win, pos_masked))
 
     # ------------------------------------------------------------------
     # Phase 5: Genome-wide DAF normalization, ranking, and output writing.
     # ------------------------------------------------------------------
     results: dict[str, pl.DataFrame] = {}
-
+    results["params"] = df_params
     for stat_key in stats:
         if not raw_per_stat[stat_key]:
             continue
@@ -1683,39 +1998,139 @@ def scan(
         defn = STAT_REGISTRY[stat_key]
         rank_col = defn.rank_col
 
-        df_all = pl.concat([t[0] for t in raw_per_stat[stat_key]])
+        df_all = (
+            pl.concat([t[0] for t in raw_per_stat[stat_key]])
+            .with_columns(pl.col("chrom").cast(int))
+            .sort("chrom", "pos")
+        )
 
         # Genome-wide DAF-bin normalization for frequency-sensitive per-SNP stats
         if stat_key in _NORMALIZE_BY_DAF and "daf" in df_all.columns:
             daf = df_all["daf"].to_numpy()
-            recomb_for_norm = None
-            if recombination_map is not None and n_r_bins is not None:
-                aligned_parts = []
-                for df_contig, pos_masked, rec_vals in raw_per_stat[stat_key]:
-                    if rec_vals is None:
-                        aligned_parts.append(np.full(len(df_contig), np.nan))
-                    else:
-                        pos_arr = df_contig["pos"].to_numpy()
-                        idx = np.clip(
-                            np.searchsorted(pos_masked, pos_arr),
-                            0,
-                            len(rec_vals) - 1,
-                        )
-                        aligned_parts.append(rec_vals[idx])
-                recomb_for_norm = np.concatenate(aligned_parts)
             if rank_col in df_all.columns:
-                vals = df_all[rank_col].to_numpy().astype(np.float64)
-                normalized = _normalize_daf_bins(
-                    vals, daf, recomb_for_norm, n_daf_bins, n_r_bins
+                # vals = df_all[rank_col].to_numpy().astype(np.float64)
+                # normalized = _normalize_daf_bins(
+                #     vals, daf, recomb_for_norm, 1 / n_daf_bins, r_bins
+                # )
+                normalized_df = normalize_stat_scan(
+                    df_all.rename({"chrom": "chr", "pos": "positions"}), df_r
                 )
-                df_all = df_all.with_columns(pl.Series(rank_col, normalized))
 
-        if rank_col in df_all.columns:
-            df_all = empirical_pvalues(
-                df_all, rank_col, abs_rank=(stat_key in _ABS_RANK)
+        if rank_col in normalized_df.columns:
+            normalized_df = empirical_pvalues(
+                normalized_df, f"{rank_col}", abs_rank=(stat_key in _ABS_RANK)
+            )
+            normalized_df = empirical_pvalues(
+                normalized_df, f"{rank_col}_std", abs_rank=(stat_key in _ABS_RANK)
             )
 
-        df_all.write_csv(f"{out_prefix}.{stat_key}.txt", separator="\t")
-        results[stat_key] = df_all.sort("chrom", "pos")
+        normalized_df.write_csv(
+            f"{vcf_path}/{out_prefix}.{stat_key}.txt", separator="\t"
+        )
+        results[stat_key] = normalized_df.sort("chr", "positions")
 
     return results
+
+
+def windowed_snps_stats(df, df_params, stat_col):
+    df_window = (
+        df_params.with_columns(
+            [
+                pl.col("model").str.extract(r"^([^:]+)", 1).alias("chr"),
+                pl.col("model")
+                .str.extract(r":(\d+)-", 1)
+                .cast(pl.Int64)
+                .alias("start"),
+                pl.col("model").str.extract(r"-(\d+)$", 1).cast(pl.Int64).alias("end"),
+            ]
+        ).sort(["chr", "start"])
+    ).select("chr", "start", "end")
+
+    # df = df.with_columns((pl.lit("chr") + pl.col("chr").cast(str)).alias("chr_str"))
+    out = []
+    for k, row in df.group_by("chr"):
+        # print(k)
+        _w = df_window.filter(pl.col("chr") == k[0]).select("start", "end").to_numpy()
+
+        val_stats, w, _ = windowed_statistic(
+            row["positions"], row[stat_col].abs().to_numpy(), np.mean, windows=_w
+        )
+
+        _tmp = (
+            pl.DataFrame(
+                {
+                    "chr": row["chr"].unique().item(),
+                    "start": _w[:, 0],
+                    "end": _w[:, -1],
+                    stat_col: val_stats,
+                }
+            )
+            .fill_nan(None)
+            .drop_nulls()
+        )
+        _tmp_emp = empirical_pvalues(_tmp, stat_col)
+        out.append(_tmp_emp)
+
+    df_emp = pl.concat(out).sort("chr", "start")
+
+    return df_emp
+
+
+# stats = ["ihs", "nsl"]
+
+# for p in [
+#     "acb",
+#     "asw",
+#     "beb",
+#     "cdx",
+#     "ceu",
+#     "chb",
+#     "chs",
+#     "clm",
+#     "esn",
+#     "fin",
+#     "gbr",
+#     "gih",
+#     "gwd",
+#     "ibs",
+#     "itu",
+#     "jpt",
+#     "khv",
+#     "lwk",
+#     "msl",
+#     "mxl",
+#     "pel",
+#     "pjl",
+#     "pur",
+#     "stu",
+#     "tsi",
+#     "yri",
+# ]:
+#     results = scan(
+#         f"/labstorage/jmurgamoreno/1000GP_high_coverage/{p}/giab/",
+#         f"{p}",
+#         stats,
+#         recombination_map="/home/jmurgamoreno/flexsweep/flexsweep/data/decode_sexavg_2019.txt.gz",
+#         nthreads=100,
+#     )
+
+
+#     results_r = scan(
+#         f"/labstorage/jmurgamoreno/1000GP_high_coverage/{p}/giab/",
+#         f"{p}.rbins",
+#         stats,
+#         recombination_map="/home/jmurgamoreno/flexsweep/flexsweep/data/decode_sexavg_2019.txt.gz",
+#         nthreads=100,
+#         r_bins=[0.37, 0.55, 0.71, 0.87, 1.05, 1.26, 1.53, 1.88, 2.46, 6.10],
+#     )
+
+#     for s in stats:
+#         tmp = windowed_snps_stats(results[s], results["params"], f"{s}_std")
+#         tmp_r = windowed_snps_stats(results_r[s], results_r["params"], f"{s}_std")
+
+#         tmp.write_csv(
+#             f"/labstorage/jmurgamoreno/1000GP_high_coverage/{p}/giab/{s}.{p}.rbins.windows.txt"
+#         )
+#         tmp_r.write_csv(
+#             f"/labstorage/jmurgamoreno/1000GP_high_coverage/{p}/giab/{s}.{p}.windows.txt"
+#         )

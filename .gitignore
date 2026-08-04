@@ -24,7 +24,7 @@ __pycache__/
 docs/_build/
 docs/_static/
 docs/_templates/
-
+docs/reports/
 
 *.md 
 !README.md

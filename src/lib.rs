@@ -471,10 +471,99 @@ fn derived_path(vcf: &Path, suffix: &str) -> PathBuf {
     p
 }
 
-fn count_variants(vcf_path: &Path) -> Result<usize, Box<dyn std::error::Error>> {
+/// What a single pass over the VCF tells us.
+///
+/// `run_polarize` already paid for this pass to get `count`, so the ordering and contig
+/// checks ride along for free.
+struct VcfScan {
+    /// Total records, counted exactly as the old `count_variants` did.
+    count: usize,
+    /// Reference contigs, in the order first seen.
+    contigs: Vec<String>,
+    /// First place the stream went backwards, as (contig, previous_pos, this_pos).
+    disorder: Option<(String, u32, u32)>,
+}
+
+fn scan_vcf(vcf_path: &Path) -> Result<VcfScan, Box<dyn std::error::Error>> {
     let mut reader = vcf::io::reader::Builder::default().build_from_path(vcf_path)?;
     reader.read_header()?;
-    Ok(reader.records().count())
+
+    let mut count: usize = 0;
+    let mut contigs: Vec<String> = Vec::new();
+    let mut disorder: Option<(String, u32, u32)> = None;
+    let mut last_contig: Option<String> = None;
+    let mut last_pos: u32 = 0;
+
+    for row in reader.records() {
+        let record = row?;
+        count += 1;
+
+        let contig = record.reference_sequence_name().to_string();
+
+        // Mirror the polarize loops: a record without a parseable start is skipped, not fatal.
+        let pos = match record.variant_start() {
+            Some(Ok(p)) => p.get() as u32,
+            _ => continue,
+        };
+
+        match &last_contig {
+            Some(prev) if prev == &contig => {
+                if pos < last_pos && disorder.is_none() {
+                    disorder = Some((contig.clone(), last_pos, pos));
+                }
+            }
+            _ => {
+                if !contigs.contains(&contig) {
+                    contigs.push(contig.clone());
+                }
+                last_contig = Some(contig);
+            }
+        }
+
+        last_pos = pos;
+    }
+
+    Ok(VcfScan {
+        count,
+        contigs,
+        disorder,
+    })
+}
+
+/// Report what the merge-join actually achieved.
+///
+/// Variants with no usable MAF alignment are dropped rather than written, so the gap between
+/// `total` and `written` is MAF coverage -- the visible symptom of a MAF that does not span
+/// the VCF. Without this the run just looks successful.
+///
+/// `flipped` counts records whose REF/ALT were swapped. It is NOT a success rate: a site
+/// whose REF is already the ancestral allele is polarized correctly and is never swapped,
+/// and `parsimony_ancestral` returns `None` for both that case and the undetermined one
+/// (see its "ref is ancestral or unknown" contract). So zero flips is unremarkable and is
+/// deliberately not warned about.
+fn report_polarization(flipped: usize, written: usize, total: usize) {
+    let coverage = if total == 0 {
+        0.0
+    } else {
+        100.0 * written as f64 / total as f64
+    };
+
+    info!(
+        "Processed {} variants: {} had a usable MAF alignment ({:.1}%), of which {} had \
+         REF/ALT swapped to the inferred ancestral allele; {} skipped (no usable MAF alignment)",
+        total,
+        written,
+        coverage,
+        flipped,
+        total.saturating_sub(written)
+    );
+
+    if written == 0 {
+        warn!(
+            "No variants had a usable MAF alignment: the MAF covers none of the VCF's \
+             positions. Check that both files describe the same contig and assembly."
+        );
+    }
 }
 
 fn compute_report_every(total_variants: usize) -> usize {
@@ -561,14 +650,35 @@ fn write_positions_row(
     Ok(())
 }
 
-fn scan_maf_species_order(maf_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+/// What a single pass over the MAF tells us.
+struct MafScan {
+    /// Species, in the order first seen. The reference species is first.
+    species: Vec<String>,
+    /// Reference contigs, in the order first seen.
+    contigs: Vec<String>,
+}
+
+/// Walk every block once, collecting the species order and the set of reference contigs.
+///
+/// The species order alone would be known after roughly one block, but the contig set needs
+/// the full file, and `run_polarize` was already paying for that full pass.
+fn scan_maf(maf_path: &Path) -> Result<MafScan, Box<dyn std::error::Error>> {
     let mut reader = MafReader::from_file(maf_path)?;
     reader.read_header()?;
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut names: Vec<String> = Vec::new();
+    let mut contigs: Vec<String> = Vec::new();
 
     while let Some(block) = reader.next_block()? {
+        // The first `s` line is the reference row, which is what block_for compares against.
+        if let Some(ref_seq) = block.sequences.first() {
+            let (_, contig) = split_src(&ref_seq.src);
+            if !contig.is_empty() && !contigs.contains(&contig.to_string()) {
+                contigs.push(contig.to_string());
+            }
+        }
+
         for seq in block.sequences {
             let (species, _) = split_src(&seq.src);
             if species.is_empty() {
@@ -580,7 +690,10 @@ fn scan_maf_species_order(maf_path: &Path) -> Result<Vec<String>, Box<dyn std::e
         }
     }
 
-    Ok(names)
+    Ok(MafScan {
+        species: names,
+        contigs,
+    })
 }
 
 fn run_polarize(args: PolarizeArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -590,9 +703,24 @@ fn run_polarize(args: PolarizeArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Err("No outgroups provided".into());
     }
 
-    let species_names = scan_maf_species_order(&args.maf)?;
+    let maf_scan = scan_maf(&args.maf)?;
+    let species_names = maf_scan.species;
     if species_names.is_empty() {
         return Err("No species found in MAF".into());
+    }
+
+    if maf_scan.contigs.len() > 1 {
+        return Err(format!(
+            "MAF {} contains {} reference contigs ({}{}). Polarization is a streaming \
+             merge-join and requires a single-contig MAF. Split it first:\n  \
+             flexsweep split-maf --maf {} --contig <name>",
+            args.maf.display(),
+            maf_scan.contigs.len(),
+            maf_scan.contigs.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
+            if maf_scan.contigs.len() > 3 { ", ..." } else { "" },
+            args.maf.display()
+        )
+        .into());
     }
 
     let mut species_index: HashMap<String, usize> = HashMap::new();
@@ -623,9 +751,61 @@ fn run_polarize(args: PolarizeArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let total_time = Instant::now();
-    let total_variants = count_variants(&args.vcf)?;
+    let vcf_scan = scan_vcf(&args.vcf)?;
+    let total_variants = vcf_scan.count;
     let count_time = total_time.elapsed();
     info!("Time to count variants: {:?}", count_time);
+
+    // The merge-join cursor is forward-only and never rewinds: on unsorted or multi-contig
+    // input it silently overshoots and drops variants. Refuse rather than return a quietly
+    // incomplete VCF.
+    if vcf_scan.contigs.len() > 1 {
+        return Err(format!(
+            "VCF {} contains {} contigs ({}{}). Polarization requires a single-contig VCF. \
+             Extract one first:\n  \
+             bcftools view -r <name> {} -Oz -o <name>.vcf.gz && tabix -p vcf <name>.vcf.gz",
+            args.vcf.display(),
+            vcf_scan.contigs.len(),
+            vcf_scan.contigs.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
+            if vcf_scan.contigs.len() > 3 { ", ..." } else { "" },
+            args.vcf.display()
+        )
+        .into());
+    }
+
+    if let Some((contig, prev, cur)) = &vcf_scan.disorder {
+        return Err(format!(
+            "VCF {} is not position-sorted: {}:{} follows {}:{}. Sort it first:\n  \
+             bcftools sort {} -Oz -o sorted.vcf.gz && tabix -p vcf sorted.vcf.gz",
+            args.vcf.display(),
+            contig,
+            cur,
+            contig,
+            prev,
+            args.vcf.display()
+        )
+        .into());
+    }
+
+    // A name mismatch (MAF 'CM000663.2' vs VCF 'chr1') makes every contig_cmp miss, which
+    // would otherwise finish cleanly with zero polarizations and exit code 0.
+    match (maf_scan.contigs.first(), vcf_scan.contigs.first()) {
+        (Some(maf_contig), Some(vcf_contig)) if maf_contig != vcf_contig => {
+            return Err(format!(
+                "Contig mismatch: MAF {} has '{}' but VCF {} has '{}'. The reference contig \
+                 must be named identically in both files.",
+                args.maf.display(),
+                maf_contig,
+                args.vcf.display(),
+                vcf_contig
+            )
+            .into());
+        }
+        (_, None) => {
+            return Err(format!("VCF {} contains no variants", args.vcf.display()).into());
+        }
+        _ => {}
+    }
 
     let report_every = compute_report_every(total_variants);
 
@@ -687,6 +867,8 @@ fn run_parsimony(
     writer.write_header(&header)?;
 
     let mut processed: usize = 0;
+    let mut flipped_count: usize = 0;
+    let mut written_count: usize = 0;
     let total_time = Instant::now();
     let species_count = species_names.len();
 
@@ -790,9 +972,13 @@ fn run_parsimony(
         )?;
 
         match polarized {
-            Some(modified) => writer.write_variant_record(&header, &modified)?,
+            Some(modified) => {
+                writer.write_variant_record(&header, &modified)?;
+                flipped_count += 1;
+            }
             None => writer.write_record(&header, &record)?,
         }
+        written_count += 1;
 
         write_positions_row(
             &mut *positions_writer,
@@ -806,6 +992,7 @@ fn run_parsimony(
 
     let query_time = total_time.elapsed();
     info!("Time to polarize variants: {:?}", query_time);
+    report_polarization(flipped_count, written_count, total_variants);
     Ok(())
 }
 
@@ -1096,6 +1283,8 @@ fn run_model_based(
     let mut contig_rank: HashMap<String, usize> = HashMap::new();
 
     let mut processed: usize = 1;
+    let mut flipped_count: usize = 0;
+    let mut written_count: usize = 0;
     let total_to_polarize = positions_to_polarize.len();
 
     info!("Polarizing variants 0/{}", total_to_polarize);
@@ -1189,13 +1378,18 @@ fn run_model_based(
         writeln!(p_anc_writer)?;
 
         match est_result.modified_record {
-            Some(modified) => writer.write_variant_record(&header, &modified)?,
+            Some(modified) => {
+                writer.write_variant_record(&header, &modified)?;
+                flipped_count += 1;
+            }
             None => writer.write_record(&header, &record)?,
         }
+        written_count += 1;
     }
 
     let query_time = total_pol_time.elapsed();
     info!("Time to polarize variants: {:?}", query_time);
+    report_polarization(flipped_count, written_count, total_variants);
 
     Ok(())
 }
@@ -1657,8 +1851,8 @@ fn process_split_block(
     target_contig: &str,
     writer: &mut dyn Write,
 ) -> io::Result<bool> {
-    // Reusing the existing block_from_lines function 
-    let record = block_from_lines(lines, 0); 
+    // Reusing the existing block_from_lines function
+    let record = block_from_lines(lines, 0);
     if record.contig == target_contig {
         writer.write_all(record.text.as_bytes())?;
         return Ok(true);

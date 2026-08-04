@@ -1093,7 +1093,9 @@ def shuffle_genome(
     # --- 3. Load sweep data for cut-point validation ---
     # A gene is "strong signal" if its rank <= max_rank_boundary in ANY sweep file
     strong_signal_genes: set = set()
-    sweep_data_by_file: dict = {}  # file → dict gene_id → tab-separated line (disk mode)
+    sweep_data_by_file: dict = (
+        {}
+    )  # file → dict gene_id → tab-separated line (disk mode)
     rank_matrix_by_file: dict = {}  # file → (gene_col, rank_cols, numpy int32 matrix)
 
     for sf in sweep_files:
@@ -1616,7 +1618,8 @@ def run_enrichment(
             thresholds=thresholds,
             populations=populations,
             groups=groups,
-            pop_interest="All",  # FDR requires all-population scopes; matches Perl "All:"
+            # FDR requires all-population scopes; matches Perl "All:"
+            pop_interest="All",
             use_clust=False,
             count_sweeps=False,
             nthreads=nthreads,

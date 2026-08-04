@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "flexsweep"
-version = "1.9.2"
+version = "2.0"
 description = ""
 authors = [{ name = "Jesus Murga-Moreno", email = "murgamoreno@gmail.com" }]
 requires-python = ">=3.12,<3.13"
@@ -26,13 +26,15 @@ dependencies = [
     "numpy==1.26.4",
     "numba>=0.60.0,<0.61",
     "demes>=0.2.3,<0.3",
-    "tensorflow[and-cuda]>=2.18.0,<3",
+    "tensorflow[and-cuda]==2.18.1",
     "pyarrow>=21.0.0,<22",
     "matplotlib>=3.9.2,<4",
     "polars>=1.14.0,<2",
     "polars-bio>=0.20.1,<1",
     "tbb>=2022.1.0,<2023",
     "tqdm>=4.67.1,<5",
+    "ngboost>=0.5.0",
+    "pyyaml>=6.0",
 ]
 
 [project.urls]

@@ -38,7 +38,10 @@ napoleon_google_docstring = True
 napoleon_use_param = False
 napoleon_use_rtype = False
 
-autodoc_mock_imports = ["tensorflow", "flexsweep.cnn"]
+# Only third-party heavy deps belong here. Mocking `flexsweep.cnn` itself would
+# turn every autodoc directive pointing into it (e.g. `flexsweep.cnn.CNN` in
+# api.rst) into an empty stub.
+autodoc_mock_imports = ["tensorflow"]
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "cms.rst"]
