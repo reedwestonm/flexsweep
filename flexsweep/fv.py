@@ -1177,6 +1177,7 @@ def _process_vcf(
                 parallel_manager=stats_pool,
                 centers=centers,
             )
+            print(_tmp_stats)
             snps_df, window_df = _tmp_stats
             tmp_bins.append({"snps": snps_df, "windows": window_df})
 
