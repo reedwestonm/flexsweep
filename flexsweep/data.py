@@ -53,7 +53,11 @@ def get_contig_from_vcf_filename(path):
     headers = read_vcf_headers(path)
 
     # Parse contigs
-    contig_pattern = re.compile(r"##contig=<ID=([^,]+),length=(\d+)>")
+    # Changed regex pattern because bat vcfs have assembly name after the contig length
+    contig_pattern = re.compile(
+    r"##contig=<ID=([^,]+),length=(\d+)(?:,|>)"
+)
+
 
     contigs = {
         m.group(1): int(m.group(2))
