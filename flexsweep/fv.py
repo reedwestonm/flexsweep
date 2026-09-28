@@ -1127,6 +1127,7 @@ def _process_vcf(
                     np.asarray(center_coords),
                     cm_mb=True,
                 )
+                print(f"cm_mb: {cm_mb}")
             if r_bins is not None:
                 tmp_r = cm_mb.with_columns(
                     [
