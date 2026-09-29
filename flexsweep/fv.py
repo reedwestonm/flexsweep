@@ -722,6 +722,7 @@ def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
             .filter(pl.col("chr") == "chr" + str(np_chrom[0]))
             .sort("start")
         )
+        print(df_recombination_map)
         genetic_distance = get_cm(df_recombination_map, position_masked)
 
         rec_map = pl.DataFrame(
@@ -737,6 +738,7 @@ def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
             rec_map[:, -1] = rec_map[:, -2]
 
     genetic_position_masked = rec_map[:, -1]
+    print(f"genetic position masked: {genetic_position_masked}")
 
     return (
         np.ascontiguousarray(hap_int, dtype=np.int8),
