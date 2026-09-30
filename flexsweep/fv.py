@@ -719,7 +719,7 @@ def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
                     ]
                 ),
             )
-            .filter(pl.col("chr") == "chr" + str(np_chrom[0]))
+            .filter(pl.col("chr") == str(np_chrom[0]))
             .sort("start")
         )
         print(np_chrom[0])
