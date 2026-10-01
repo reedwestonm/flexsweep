@@ -2523,7 +2523,7 @@ def calculate_stats_vcf_flat(
         )
         for i in range(0, len(unique_combos), chunk_size)
     )
-
+    print(f"tasks: {tasks}")
     # execute
     if parallel_manager is not None:
         results = parallel_manager(tasks)
