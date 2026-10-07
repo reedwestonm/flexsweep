@@ -354,13 +354,12 @@ def _ms_float_to_int(positions, total_phys_len):
 
 
 def parse_and_filter_ms(
-    print("running parse_and_filter_ms")
     ms_file: str,
     seq_len: float = 1.2e6,
     discretize_positions: bool = True,
 ):
     from allel import HaplotypeArray
-
+    print("running parse_and_filter_ms")
     if not ms_file.endswith((".out", ".out.gz", ".ms", ".ms.gz")):
         warn(f"File {ms_file} has an unexpected extension.")
 
@@ -478,7 +477,7 @@ def parse_and_filter_ms(
 
 
 def parse_ms_numpy(
-    print("running parse_ms_numpy")
+    
     ms_file: str,
     seq_len: float = 1.2e6,
     discretize_positions: bool = True,
@@ -488,7 +487,7 @@ def parse_ms_numpy(
     Optimized for high-core count scaling (128+ threads).
     """
     open_func = gzip.open if ms_file.endswith(".gz") else open
-
+    print("running parse_ms_numpy")
     # Use 'rb' (binary) to avoid the overhead of UTF-8 decoding
     try:
         with open_func(ms_file, "rb") as fh:
