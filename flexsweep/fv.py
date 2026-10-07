@@ -212,6 +212,7 @@ def open_tree(ts, seq_len=1.2e6):
     )
 
     hap = HaplotypeArray(G.astype(np.int8), copy=False)
+    print(f"open tree hap: {hap}")
     ac = hap.count_alleles()
     biallelic_mask = ac.is_biallelic_01()
 
@@ -453,6 +454,7 @@ def parse_and_filter_ms(
     )
 
     hap = HaplotypeArray(H, copy=False)
+    print(f"parse and filter hap: {hap}")
     ac = hap.count_alleles()
     biallelic_mask = ac.is_biallelic_01()
 
@@ -722,7 +724,7 @@ def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
             .filter(pl.col("chr") == str(np_chrom[0]))
             .sort("start")
         )
-        print(np_chrom[0])
+        
         genetic_distance = get_cm(df_recombination_map, position_masked)
 
         rec_map = pl.DataFrame(
@@ -1128,7 +1130,7 @@ def _process_vcf(
                     np.asarray(center_coords),
                     cm_mb=True,
                 )
-                print(f"cm_mb: {cm_mb}")
+
             if r_bins is not None:
                 tmp_r = cm_mb.with_columns(
                     [
@@ -2523,7 +2525,6 @@ def calculate_stats_vcf_flat(
         )
         for i in range(0, len(unique_combos), chunk_size)
     )
-    print(f"tasks: {tasks}")
     # execute
     if parallel_manager is not None:
         results = parallel_manager(tasks)
@@ -4820,7 +4821,7 @@ def hscan(
 
     h_means = _hscan_all(hap, pos, indices, int64(max_gap), dist_mode)
     return pos[indices], h_means
-
+    print("hscan finished")
 
 ################## FS stats
 
@@ -4960,6 +4961,7 @@ def s_ratio(
     :returns: DataFrame with columns ``positions``, ``daf``, ``s_ratio``.
     :rtype: polars.DataFrame
     """
+    
     sq_freqs, info, snps_indices = fast_sq_freq_pairs(
         hap, ac, rec_map, min_focal_freq, max_focal_freq, window_size
     )
