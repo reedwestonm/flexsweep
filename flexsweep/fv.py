@@ -4922,7 +4922,9 @@ def fast_sq_freq_pairs(
 
         sq_out_list[j] = out
         snp_indices_list[j] = indices_out
-
+    print(f"sq_out_list: {sq_out_list}")
+    print(f"info: {info}")
+    print(f"snp_indices_list: {snp_indices_list}")
     return sq_out_list, info, snp_indices_list
 
 
