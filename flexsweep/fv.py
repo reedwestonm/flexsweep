@@ -172,6 +172,7 @@ def reset_empirical_bins(results, r_bins):
 
 
 def open_tree(ts, seq_len=1.2e6):
+    print("running open_tree")
     """Read a tree sequence file and return outputs matching parse_ms_numpy format.
 
     Returns
@@ -353,6 +354,7 @@ def _ms_float_to_int(positions, total_phys_len):
 
 
 def parse_and_filter_ms(
+    print("running parse_and_filter_ms")
     ms_file: str,
     seq_len: float = 1.2e6,
     discretize_positions: bool = True,
@@ -476,6 +478,7 @@ def parse_and_filter_ms(
 
 
 def parse_ms_numpy(
+    print("running parse_ms_numpy")
     ms_file: str,
     seq_len: float = 1.2e6,
     discretize_positions: bool = True,
@@ -631,6 +634,7 @@ def cleaning_summaries(summ_stats, params, model):
 
 
 def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
+    print("running genome_reader")
     """
     Read a VCF/BCF region and return haplotypes, recombination map, allel count array, biallelic masking, physical and genetic positions arrays.
 
@@ -752,6 +756,7 @@ def genome_reader(hap_data, recombination_map=None, region=None, samples=None):
 
 
 def get_cm(df_rec_map, positions, cm_mb=False):
+    print("running get_cm")
     """
     Interpolate cumulative genetic distance (cM) at given physical positions.
 
@@ -980,7 +985,7 @@ def _process_vcf(
 ):
     from . import Parallel, delayed
     from .data import Data
-
+    print("running process_vcf")
     """
     Process VCF/BCF files to compute, normalize, and estimate feature vectors.
 
@@ -2360,6 +2365,7 @@ def calculate_stats_vcf_flat(
     isafe_region_size=int(2e6),
     centers=None,
 ):
+    print("running calculate_vcf_stats_flat")
     """Compute per-locus-window summary statistics from a VCF with O(N) window work.
 
     Instead of computing stats for every (locus_window × center) pair — which
@@ -4803,6 +4809,7 @@ def hscan(
     right_bound=int(1e9),
     return_pairs=False,
 ):
+    print("running hscan")
     # F-order: haplotype columns contiguous
     hap_f = np.asfortranarray(hap)
     S = hap.shape[0]
@@ -4835,6 +4842,7 @@ def fast_sq_freq_pairs(
     max_focal_freq=0.95,
     window_size=50000,
 ):
+    print("running fast_sq_freq_pairs")
     n_snps, n_samples = hap.shape
     rec_pos = rec_map[:, -2]
     half_window = window_size * 0.5
